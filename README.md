@@ -23,4 +23,4 @@ Frontend: http://localhost:3000 · API: http://localhost:8000/docs
 The bundled model is trained on synthetic SAR-like chips so that the repository is runnable offline. Its bundled holdout metrics are synthetic-demo metrics only. Real Sentinel-1 labelled validation is still required before operational deployment; the UI and API therefore label outputs as **ML candidates requiring analyst review**.
 
 ## Live integrations
-Set `AIS_MODE=live` with `AISSTREAM_API_KEY` for live AISStream. Set `EMAIL_MODE=live` with `RESEND_API_KEY` and `SENDER_EMAIL` for live email. Demo mode is the safe default for judging.
+Set `AIS_MODE=live` with `AISSTREAM_API_KEY` for live AISStream. Set `EMAIL_MODE=live` with `RESEND_API_KEY` and `SENDER_EMAIL` for live email.

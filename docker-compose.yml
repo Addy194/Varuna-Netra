@@ -1,0 +1,55 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports: ["27017:27017"]
+    volumes: ["mongo_data:/data/db"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' localhost:27017/test"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: varunanetra
+      JWT_SECRET: ${JWT_SECRET:-demo-only-change-me}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@varunanetra.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-demo-admin-password}
+      DEMO_SUPERVISOR_EMAIL: ${DEMO_SUPERVISOR_EMAIL:-supervisor@varunanetra.local}
+      DEMO_SUPERVISOR_PASSWORD: ${DEMO_SUPERVISOR_PASSWORD:-demo-supervisor-password}
+      DEMO_ANALYST_EMAIL: ${DEMO_ANALYST_EMAIL:-analyst@varunanetra.local}
+      DEMO_ANALYST_PASSWORD: ${DEMO_ANALYST_PASSWORD:-demo-analyst-password}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      AIS_MODE: ${AIS_MODE:-demo}
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      EMAIL_MODE: ${EMAIL_MODE:-demo}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SENDER_EMAIL: ${SENDER_EMAIL:-}
+      STORAGE_MODE: local
+      LOCAL_STORAGE_DIR: /data/storage
+      JOB_WORKERS: ${JOB_WORKERS:-2}
+      JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
+      JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-900}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes: ["local_storage:/data/storage"]
+    ports: ["8000:8000"]
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: http://localhost:8000
+    restart: unless-stopped
+    depends_on: [backend]
+    ports: ["3000:80"]
+volumes:
+  mongo_data:
+  local_storage:

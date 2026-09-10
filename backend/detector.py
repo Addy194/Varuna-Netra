@@ -1,7 +1,6 @@
-import asyncio, hashlib, io, json, math
+import asyncio, hashlib, io, json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -48,12 +47,35 @@ def model_info():
     seg = segmentation_model_info()
     baseline = _baseline_model_info()
     active = seg if seg.get("available") else baseline
-    return {**active, "preferred_model": "sar_spill_seg_v2", "segmentation_runtime": seg, "fallback_model": baseline}
+    return {
+        **active,
+        "preferred_model": "sar_spill_seg_v2",
+        "segmentation_runtime": seg,
+        "fallback_model": baseline,
+    }
 
 
-def _affine(bbox, w, h):
+def _affine_bbox_mapper(bbox, w, h):
     west, south, east, north = bbox
-    return lambda x, y: (west + (x / w) * (east - west), north - (y / h) * (north - south))
+    return lambda x, y: (
+        west + (x / w) * (east - west),
+        north - (y / h) * (north - south),
+    )
+
+
+def _raster_wgs84_mapper(crs, transform):
+    """Map floating pixel coordinates from a raster window to lon/lat."""
+    from rasterio.transform import xy
+    from rasterio.warp import transform as warp_transform
+
+    def mapper(x, y):
+        gx, gy = xy(transform, y, x, offset="center")
+        if not crs or str(crs).upper() in {"EPSG:4326", "OGC:CRS84"}:
+            return float(gx), float(gy)
+        lon, lat = warp_transform(crs, "EPSG:4326", [gx], [gy])
+        return float(lon[0]), float(lat[0])
+
+    return mapper
 
 
 def _features(img):
@@ -123,27 +145,69 @@ def _asset_to_gray(data: bytes):
         return None
 
 
-def _read_remote_band(url: str):
-    """Read a manageable native-resolution COG without first downloading the whole asset."""
+def _read_remote_band(url: str, analysis_bbox=None):
+    """Read a COG band, optionally restricted to a WGS84 investigation AOI."""
     import rasterio
+    from rasterio.errors import WindowError
+    from rasterio.windows import Window, bounds as window_bounds, from_bounds
+    from rasterio.warp import transform_bounds
+
     with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_MULTIRANGE="YES"):
         with rasterio.open(url) as ds:
-            if ds.height * ds.width > SEG_MAX_PIXELS:
-                raise IncompatibleSARInput(
-                    f"scene_too_large_for_runtime:{ds.height}x{ds.width}; crop/prepare an AOI before v2 inference"
-                )
-            arr = ds.read(1).astype(np.float32)
-            return arr, str(ds.crs), tuple(ds.transform)
+            window = None
+            if analysis_bbox is not None:
+                if not ds.crs:
+                    raise IncompatibleSARInput("raster_crs_missing; cannot project analysis_bbox")
+                try:
+                    projected = transform_bounds(
+                        "EPSG:4326", ds.crs, *analysis_bbox, densify_pts=21
+                    )
+                    requested = from_bounds(*projected, transform=ds.transform)
+                    full = Window(0, 0, ds.width, ds.height)
+                    window = requested.intersection(full).round_offsets().round_lengths()
+                except (WindowError, ValueError) as exc:
+                    raise IncompatibleSARInput(
+                        f"analysis_bbox_outside_raster:{analysis_bbox}"
+                    ) from exc
+                if window.width < 1 or window.height < 1:
+                    raise IncompatibleSARInput("analysis_bbox_has_no_raster_pixels")
+                pixels = int(window.width * window.height)
+                if pixels > SEG_MAX_PIXELS:
+                    raise IncompatibleSARInput(
+                        f"analysis_aoi_too_large:{int(window.height)}x{int(window.width)}; "
+                        "zoom in or reduce analysis_bbox before v2 inference"
+                    )
+                arr = ds.read(1, window=window).astype(np.float32)
+                transform = ds.window_transform(window)
+                rb = window_bounds(window, ds.transform)
+                actual_bbox = transform_bounds(ds.crs, "EPSG:4326", *rb, densify_pts=21)
+            else:
+                if ds.height * ds.width > SEG_MAX_PIXELS:
+                    raise IncompatibleSARInput(
+                        f"scene_too_large_for_runtime:{ds.height}x{ds.width}; "
+                        "register the scene with analysis_bbox to run v2 on an investigation AOI"
+                    )
+                arr = ds.read(1).astype(np.float32)
+                transform = ds.transform
+                rb = ds.bounds
+                if ds.crs:
+                    actual_bbox = transform_bounds(ds.crs, "EPSG:4326", *rb, densify_pts=21)
+                else:
+                    actual_bbox = tuple(rb)
+
+            return arr, str(ds.crs) if ds.crs else None, transform, [float(x) for x in actual_bbox]
 
 
-def _read_remote_pair(vv_url: str, vh_url: str):
-    vv, vv_crs, vv_transform = _read_remote_band(vv_url)
-    vh, vh_crs, vh_transform = _read_remote_band(vh_url)
+def _read_remote_pair(vv_url: str, vh_url: str, analysis_bbox=None):
+    vv, vv_crs, vv_transform, vv_bbox = _read_remote_band(vv_url, analysis_bbox)
+    vh, vh_crs, vh_transform, vh_bbox = _read_remote_band(vh_url, analysis_bbox)
     if vv.shape != vh.shape:
         raise IncompatibleSARInput(f"vv_vh_shape_mismatch:{vv.shape}:{vh.shape}")
     if vv_crs != vh_crs or vv_transform != vh_transform:
         raise IncompatibleSARInput("vv_vh_grid_mismatch")
-    return vv, vh
+    if any(abs(a - b) > 1e-5 for a, b in zip(vv_bbox, vh_bbox)):
+        raise IncompatibleSARInput("vv_vh_bounds_mismatch")
+    return vv, vh, vv_crs, vv_transform, vv_bbox
 
 
 async def _baseline_imagery(scene):
@@ -164,7 +228,9 @@ async def _baseline_imagery(scene):
         arr = _asset_to_gray(png)
         if arr is not None:
             return arr, False, "rendered_preview"
-    arr = _asset_to_gray(_synthetic_demo(scene.get("id") or scene.get("provider_scene_id") or "demo"))
+    arr = _asset_to_gray(
+        _synthetic_demo(scene.get("id") or scene.get("provider_scene_id") or "demo")
+    )
     return arr, True, "synthetic_demo"
 
 
@@ -187,6 +253,7 @@ def _contours(
     max_area_frac=MAX_AREA_FRAC,
     min_elongation=MIN_ELONGATION,
     score_as_confidence=False,
+    pixel_to_geo=None,
 ):
     prob = cv2.GaussianBlur(prob, (0, 0), 2.0)
     valid = (prob >= threshold).astype(np.uint8) * 255
@@ -195,7 +262,8 @@ def _contours(
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=2)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     h, w = img.shape
-    to_geo, fp = _affine(bbox, w, h), shape(footprint)
+    to_geo = pixel_to_geo or _affine_bbox_mapper(bbox, w, h)
+    fp = shape(footprint)
     spots = []
     for c in contours:
         area = cv2.contourArea(c)
@@ -218,7 +286,10 @@ def _contours(
             continue
         confidence = score if score_as_confidence else min(0.99, 0.45 + 0.6 * (score - 0.5))
         spots.append({
-            "geometry": {"type": "Polygon", "coordinates": [[[round(x, 5), round(y, 5)] for x, y in ring]]},
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[round(x, 5), round(y, 5)] for x, y in ring]],
+            },
             "area_px": float(area),
             "elongation": round(float(elong), 2),
             "model_score": round(score, 3),
@@ -245,11 +316,17 @@ async def _try_segmentation(scene, bbox, footprint):
     domain = _segmentation_domain(scene)
     if not domain:
         collection = md.get("stac_collection") or "unknown"
-        return None, f"incompatible_radiometry:{collection}; v2 expects prepared Sigma0 or Sentinel-1 RTC"
+        return None, (
+            f"incompatible_radiometry:{collection}; "
+            "v2 expects prepared Sigma0 or Sentinel-1 RTC"
+        )
 
+    analysis_bbox = md.get("analysis_bbox")
     try:
         vv_url, vh_url = await asyncio.gather(access_href(vv_href), access_href(vh_href))
-        vv, vh = await asyncio.to_thread(_read_remote_pair, vv_url, vh_url)
+        vv, vh, raster_crs, raster_transform, actual_bbox = await asyncio.to_thread(
+            _read_remote_pair, vv_url, vh_url, analysis_bbox
+        )
         prob, inference = await asyncio.to_thread(infer_segmentation, vv, vh, domain)
     except (IncompatibleSARInput, SegmentationUnavailable) as exc:
         if status.get("mode") == "force":
@@ -258,25 +335,37 @@ async def _try_segmentation(scene, bbox, footprint):
     except Exception as exc:  # noqa: BLE001
         if status.get("mode") == "force":
             raise
-        return None, f"segmentation_input_or_inference_failed:{type(exc).__name__}:{str(exc)[:140]}"
+        return None, (
+            f"segmentation_input_or_inference_failed:{type(exc).__name__}:"
+            f"{str(exc)[:140]}"
+        )
 
     vv_db = seg_to_db(vv, domain)
-    display = (normalize_seg_db(vv_db, inference["db_min"], inference["db_max"]) * 255).astype(np.uint8)
+    display = (
+        normalize_seg_db(vv_db, inference["db_min"], inference["db_max"]) * 255
+    ).astype(np.uint8)
+    mapper = _raster_wgs84_mapper(raster_crs, raster_transform)
     spots, _ = _contours(
         prob,
         display,
-        bbox,
+        actual_bbox,
         footprint,
         threshold=inference["threshold"],
         max_area_frac=0.35,
         min_elongation=1.0,
         score_as_confidence=True,
+        pixel_to_geo=mapper,
     )
     info = segmentation_model_info()
     info["inference"] = inference
     note = "Real-data VV/VH semantic-segmentation candidate detection. Analyst review required."
+    if analysis_bbox:
+        note += " Inference was restricted to the registered investigation AOI."
     if inference.get("domain_shift"):
-        note += " Runtime input is RTC Gamma0 converted to dB while training data are Sigma0 dB; domain shift is explicitly flagged."
+        note += (
+            " Runtime input is RTC Gamma0 converted to dB while training data are "
+            "Sigma0 dB; domain shift is explicitly flagged."
+        )
     return {
         "spots": spots,
         "width": int(display.shape[1]),
@@ -287,6 +376,9 @@ async def _try_segmentation(scene, bbox, footprint):
         "model": info,
         "detector_version": SEG_DETECTOR_VERSION,
         "domain_shift": bool(inference.get("domain_shift")),
+        "analysis_bbox_requested": analysis_bbox,
+        "analysis_bbox_used": actual_bbox,
+        "raster_crs": raster_crs,
         "display": display,
         "note": note,
     }, None
@@ -294,7 +386,12 @@ async def _try_segmentation(scene, bbox, footprint):
 
 def analyze_array(img, bbox, footprint, synthetic=False, source="sar"):
     if img is None or img.size < 1000:
-        return {"spots": [], "note": "insufficient valid pixels", "synthetic": synthetic, "input_source": source}
+        return {
+            "spots": [],
+            "note": "insufficient valid pixels",
+            "synthetic": synthetic,
+            "input_source": source,
+        }
     prob = _predict_baseline(img)
     spots, _ = _contours(prob, img, bbox, footprint)
     note = "Bundled ML demo model; real Sentinel-1 labelled validation required before operational use."
@@ -317,7 +414,12 @@ def thumbnail_webp(png_or_arr: bytes | np.ndarray, pixel_bbox: list, pad: int = 
     else:
         img = Image.open(io.BytesIO(png_or_arr)).convert("RGB")
     x, y, bw, bh = pixel_bbox
-    box = (max(0, x - pad), max(0, y - pad), min(img.width, x + bw + pad), min(img.height, y + bh + pad))
+    box = (
+        max(0, x - pad),
+        max(0, y - pad),
+        min(img.width, x + bw + pad),
+        min(img.height, y + bh + pad),
+    )
     crop = img.crop(box)
     crop.thumbnail((480, 480))
     out = io.BytesIO()
@@ -327,6 +429,7 @@ def thumbnail_webp(png_or_arr: bytes | np.ndarray, pixel_bbox: list, pad: int = 
 
 async def get_quicklook(scene):
     from storage import get_object
+
     if scene.get("quicklook_path"):
         try:
             data, _ = await get_object(scene["quicklook_path"])
@@ -341,7 +444,10 @@ async def get_quicklook(scene):
     path = f'{APP_NAME}/quicklooks/{scene["provider_scene_id"]}.png'
     try:
         res = await put_object(path, png, "image/png")
-        await db.scenes.update_one({"id": scene["id"]}, {"$set": {"quicklook_path": res["path"], "quicklook_bytes": len(png)}})
+        await db.scenes.update_one(
+            {"id": scene["id"]},
+            {"$set": {"quicklook_path": res["path"], "quicklook_bytes": len(png)}},
+        )
     except Exception:
         pass
     return png
@@ -362,7 +468,11 @@ async def detect_scene(scene, actor="system"):
             res["note"] += f" sar_spill_seg_v2 fallback: {fallback_reason}."
 
     model = res.get("model") or _baseline_model_info()
-    detector_version = res.get("detector_version") or model.get("detector_version") or BASELINE_DETECTOR_VERSION
+    detector_version = (
+        res.get("detector_version")
+        or model.get("detector_version")
+        or BASELINE_DETECTOR_VERSION
+    )
     model_id = model.get("model_id", _BASE_MODEL["model_id"])
     using_v2 = model_id == "sar_spill_seg_v2"
     synthetic = bool(res.get("synthetic"))
@@ -373,7 +483,13 @@ async def detect_scene(scene, actor="system"):
         conf = s["confidence"]
         flags = ["ml_candidate", "analyst_review_required"]
         if using_v2:
-            flags += ["vv_vh_dual_polarization", "real_data_segmentation_model", "uncalibrated_model_score"]
+            flags += [
+                "vv_vh_dual_polarization",
+                "real_data_segmentation_model",
+                "uncalibrated_model_score",
+            ]
+            if res.get("analysis_bbox_used"):
+                flags.append("aoi_windowed_inference")
             if res.get("domain_shift"):
                 flags.append("sar_domain_shift_gamma0_vs_sigma0")
         if conf < 0.68:
@@ -402,6 +518,7 @@ async def detect_scene(scene, actor="system"):
         try:
             thumb = thumbnail_webp(arr, s["pixel_bbox"])
             from db import db as _db
+
             aid = f'{spill["id"]}-detector'
             await _db.attachments.insert_one({
                 "id": aid,
@@ -414,33 +531,53 @@ async def detect_scene(scene, actor="system"):
                 "is_deleted": False,
             })
             await put_object(f"{APP_NAME}/attachments/{aid}.webp", thumb, "image/webp")
-            await _db.cases.update_one({"id": case["id"]}, {"$set": {"thumbnail_attachment_id": aid}})
+            await _db.cases.update_one(
+                {"id": case["id"]}, {"$set": {"thumbnail_attachment_id": aid}}
+            )
         except Exception:
             pass
 
-    summary = {k: v for k, v in res.items() if k != "spots"} | {"spots": len(res["spots"]), "at": now}
-    await db.scenes.update_one({"id": scene["id"]}, {"$set": {
-        "status": "detected",
-        "detector_version": detector_version,
-        "detector_summary": summary,
-    }})
-    await audit("scene", scene["id"], "scene.detected", {
-        "detector": detector_version,
-        "model": model_id,
+    summary = {k: v for k, v in res.items() if k != "spots"} | {
         "spots": len(res["spots"]),
-        "cases": [c["case_number"] for c in cases],
-        "synthetic_input": synthetic,
-        "segmentation_fallback_reason": res.get("segmentation_fallback_reason"),
-        "domain_shift": bool(res.get("domain_shift")),
-    }, actor)
+        "at": now,
+    }
+    await db.scenes.update_one(
+        {"id": scene["id"]},
+        {"$set": {
+            "status": "detected",
+            "detector_version": detector_version,
+            "detector_summary": summary,
+        }},
+    )
+    await audit(
+        "scene",
+        scene["id"],
+        "scene.detected",
+        {
+            "detector": detector_version,
+            "model": model_id,
+            "spots": len(res["spots"]),
+            "cases": [c["case_number"] for c in cases],
+            "synthetic_input": synthetic,
+            "segmentation_fallback_reason": res.get("segmentation_fallback_reason"),
+            "domain_shift": bool(res.get("domain_shift")),
+            "analysis_bbox_requested": res.get("analysis_bbox_requested"),
+            "analysis_bbox_used": res.get("analysis_bbox_used"),
+        },
+        actor,
+    )
     return {
         "detector": detector_version,
         "model": model,
-        "operational_validation_required": bool(model.get("operational_validation_required", True)),
+        "operational_validation_required": bool(
+            model.get("operational_validation_required", True)
+        ),
         "synthetic_input": synthetic,
         "spots": len(res["spots"]),
         "cases": cases,
         "input_source": res.get("input_source"),
         "segmentation_fallback_reason": res.get("segmentation_fallback_reason"),
+        "analysis_bbox_requested": res.get("analysis_bbox_requested"),
+        "analysis_bbox_used": res.get("analysis_bbox_used"),
         "note": res.get("note"),
     }

@@ -27,9 +27,9 @@ jobs:
       - name: Compile backend
         run: python -m compileall -q backend
 
-      - name: Correlation regression test
+      - name: Correlation and detector guardrail tests
         working-directory: backend
-        run: pytest -q tests/test_correlation_golden.py
+        run: pytest -q tests/test_correlation_golden.py tests/test_sar_segmentation_runtime.py
 
       - uses: actions/setup-node@v4
         with:

@@ -55,7 +55,7 @@ def metrics_from_counts(counts: dict, eps: float = 1e-8):
     }.items()}
 
 
-def run_epoch(model, loader, optimizer, device, train: bool):
+def run_epoch(model, loader, optimizer, device, train: bool, scaler=None, use_amp: bool = False):
     model.train(train)
     bce = nn.BCEWithLogitsLoss()
     losses = []
@@ -65,12 +65,19 @@ def run_epoch(model, loader, optimizer, device, train: bool):
         for batch in loader:
             images = batch["image"].to(device, non_blocking=True)
             masks = batch["mask"].to(device, non_blocking=True)
-            logits = model(images)
-            loss = 0.5 * bce(logits, masks) + 0.5 * dice_loss(logits, masks)
             if train:
                 optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                logits = model(images)
+                loss = 0.5 * bce(logits, masks) + 0.5 * dice_loss(logits, masks)
+            if train:
+                if scaler is not None and use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
             losses.append(float(loss.detach().cpu()))
             accumulate(counts, binary_metrics(logits.detach(), masks, threshold=0.5))
     return {"loss": round(float(np.mean(losses)) if losses else 0.0, 6), **metrics_from_counts(counts)}
@@ -94,6 +101,7 @@ def parse_args():
     p.add_argument("--db-min", type=float, default=-50.0)
     p.add_argument("--db-max", type=float, default=5.0)
     p.add_argument("--patience", type=int, default=7)
+    p.add_argument("--no-amp", action="store_true", help="Disable CUDA mixed precision")
     return p.parse_args()
 
 
@@ -101,17 +109,21 @@ def main():
     args = parse_args()
     seed_everything(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = device.type == "cuda" and not args.no_amp
     scenes = discover_training_scenes(
         args.oil_images, args.oil_masks, args.no_oil_images, args.lookalike_images
     )
     train_scenes, val_scenes = stratified_scene_split(scenes, args.val_fraction, args.seed)
+    train_counts = {k: sum(s.kind == k for s in train_scenes) for k in ("oil", "no_oil", "lookalike")}
+    val_counts = {k: sum(s.kind == k for s in val_scenes) for k in ("oil", "no_oil", "lookalike")}
     print(json.dumps({
         "device": str(device),
+        "mixed_precision": use_amp,
         "total_scenes": len(scenes),
         "train_scenes": len(train_scenes),
         "validation_scenes": len(val_scenes),
-        "train_by_class": {k: sum(s.kind == k for s in train_scenes) for k in ("oil", "no_oil", "lookalike")},
-        "validation_by_class": {k: sum(s.kind == k for s in val_scenes) for k in ("oil", "no_oil", "lookalike")},
+        "train_by_class": train_counts,
+        "validation_by_class": val_counts,
     }, indent=2))
 
     train_ds = SentinelOilTileDataset(
@@ -134,6 +146,7 @@ def main():
     model = UNetSmall(in_channels=2, out_channels=1, base=32).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=2)
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -142,10 +155,17 @@ def main():
     history = []
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = run_epoch(model, train_loader, optimizer, device, train=True)
-        val_metrics = run_epoch(model, val_loader, optimizer, device, train=False)
+        # Change training crops each epoch while validation remains frozen at epoch 0.
+        train_ds.set_epoch(epoch)
+        train_metrics = run_epoch(model, train_loader, optimizer, device, train=True, scaler=scaler, use_amp=use_amp)
+        val_metrics = run_epoch(model, val_loader, optimizer, device, train=False, use_amp=use_amp)
         scheduler.step(val_metrics["dice"])
-        row = {"epoch": epoch, "train": train_metrics, "validation": val_metrics}
+        row = {
+            "epoch": epoch,
+            "learning_rate": optimizer.param_groups[0]["lr"],
+            "train": train_metrics,
+            "validation": val_metrics,
+        }
         history.append(row)
         print(json.dumps(row))
 
@@ -155,6 +175,7 @@ def main():
             checkpoint = {
                 "model_id": MODEL_ID,
                 "model_type": "unet_semantic_segmentation",
+                "model_config": {"in_channels": 2, "out_channels": 1, "base": 32},
                 "state_dict": model.state_dict(),
                 "input_channels": ["VV", "VH"],
                 "input_representation": "Sentinel-1 Sigma0 dB",
@@ -166,20 +187,35 @@ def main():
                     "seed": args.seed,
                     "train_scenes": len(train_scenes),
                     "validation_scenes": len(val_scenes),
+                    "train_by_class": train_counts,
+                    "validation_by_class": val_counts,
+                    "epochs_requested": args.epochs,
+                    "best_epoch": epoch,
+                    "batch_size": args.batch_size,
+                    "tiles_per_scene": args.tiles_per_scene,
+                    "learning_rate": args.learning_rate,
+                    "optimizer": "AdamW",
+                    "loss": "0.5*BCEWithLogits + 0.5*Dice",
+                    "mixed_precision": use_amp,
+                    "torch_version": torch.__version__,
+                    "numpy_version": np.__version__,
                     "best_validation_metrics": val_metrics,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "operational_validation_required": True,
                 },
             }
             torch.save(checkpoint, output)
-            output.with_suffix(".json").write_text(json.dumps({k: v for k, v in checkpoint.items() if k != "state_dict"}, indent=2) + "\n")
+            output.with_suffix(".json").write_text(
+                json.dumps({k: v for k, v in checkpoint.items() if k != "state_dict"}, indent=2) + "\n",
+                encoding="utf-8",
+            )
         else:
             stale += 1
             if stale >= args.patience:
                 print(f"Early stopping after {epoch} epochs; best validation Dice={best_dice:.4f}")
                 break
 
-    output.with_name(output.stem + "_history.json").write_text(json.dumps(history, indent=2) + "\n")
+    output.with_name(output.stem + "_history.json").write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
     print(f"Best checkpoint: {output} (validation Dice={best_dice:.4f})")
     print("Next: evaluate this frozen checkpoint on the untouched Zenodo Part III test set.")
 

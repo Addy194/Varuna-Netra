@@ -88,9 +88,13 @@ def _load_model():
             checkpoint = torch.load(CHECKPOINT, map_location="cpu")
         if checkpoint.get("model_id") != MODEL_ID:
             raise ValueError(f"unexpected model_id={checkpoint.get('model_id')!r}")
-        arch = checkpoint.get("architecture") or {}
-        base = int(arch.get("base_channels", 32))
-        model = UNetSmall(in_channels=2, out_channels=1, base=base)
+        cfg = checkpoint.get("model_config") or checkpoint.get("architecture") or {}
+        in_channels = int(cfg.get("in_channels", 2))
+        out_channels = int(cfg.get("out_channels", 1))
+        base = int(cfg.get("base", cfg.get("base_channels", 32)))
+        if in_channels != 2 or out_channels != 1:
+            raise ValueError(f"unsupported model_config={cfg!r}")
+        model = UNetSmall(in_channels=in_channels, out_channels=out_channels, base=base)
         model.load_state_dict(checkpoint["state_dict"])
         model.to(device).eval()
         _MODEL, _CHECKPOINT_DATA, _DEVICE = model, checkpoint, device
@@ -114,7 +118,7 @@ def model_info() -> dict[str, Any]:
     if _CHECKPOINT_DATA:
         info["preprocessing"] = _CHECKPOINT_DATA.get("preprocessing")
         info["training"] = _CHECKPOINT_DATA.get("training")
-        info["architecture"] = _CHECKPOINT_DATA.get("architecture")
+        info["model_config"] = _CHECKPOINT_DATA.get("model_config") or _CHECKPOINT_DATA.get("architecture")
     return info
 
 

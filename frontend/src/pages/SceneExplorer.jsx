@@ -79,9 +79,18 @@ export default function SceneExplorer() {
   };
   const register = async (s, detect) => {
     try {
-      const { data } = await api.post("/satellite/register", { collection: s.collection, stac_id: s.stac_id, detect });
-      toast.success(data.already_registered ? "Scene already registered" : detect ? (data.detection?.spots ? `Scene registered · ${data.detection.detector === "mock" ? "mock" : "experimental dark-spot"} detector opened ${data.detection.spots} case(s)` : "Scene registered · detector found no dark spots") : "Scene registered");
-      setRes((r) => ({ ...r, scenes: r.scenes.map((x) => (x.stac_id === s.stac_id ? { ...x, registered_scene_id: data.scene.id } : x)) }));
+      const analysis_bbox = s.analysis_bbox || bbox;
+      const { data } = await api.post("/satellite/register", { collection: s.collection, stac_id: s.stac_id, detect, analysis_bbox });
+      const det = data.detection;
+      const modelId = det?.model?.model_id;
+      const modelLabel = modelId === "sar_spill_seg_v2" ? "VV+VH U-Net v2" : modelId === "sar_spill_pixel_v1" ? "baseline v1" : "detector";
+      if (detect) {
+        const fallback = det?.segmentation_fallback_reason ? ` · v2 fallback: ${det.segmentation_fallback_reason}` : "";
+        toast.success(`${data.already_registered ? "Scene updated" : "Scene registered"} · ${modelLabel} · ${det?.spots || 0} candidate(s)${fallback}`);
+      } else {
+        toast.success(data.already_registered ? "Scene AOI updated" : "Scene registered");
+      }
+      setRes((r) => ({ ...r, scenes: r.scenes.map((x) => (x.stac_id === s.stac_id ? { ...x, registered_scene_id: data.scene.id, analysis_bbox } : x)) }));
       if (detect && data.case) nav(`/cases/${data.case.id}`);
     } catch (e) { toast.error(apiError(e)); }
   };
@@ -125,7 +134,7 @@ export default function SceneExplorer() {
       </div>
       <aside className="flex w-[480px] shrink-0 flex-col overflow-hidden border-l" style={{ borderColor: "var(--border-default)", background: "var(--bg-secondary)" }}>
         <div className="border-b p-4" style={{ borderColor: "var(--border-default)" }}>
-          <p className="label-mono mb-1">Global scene search · Microsoft Planetary Computer STAC (open)</p>
+          <p className="label-mono mb-1">Global scene search · Microsoft Planetary Computer STAC</p>
           <h1 className="font-display text-2xl font-bold tracking-tight">Scene Explorer</h1>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="col-span-2 block"><span className="label-mono mb-1 block">Collection</span><select data-testid="explorer-collection-select" className={inputCls} style={bd} value={collection} onChange={(e) => setCollection(e.target.value)}>{meta?.collections.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
@@ -139,7 +148,7 @@ export default function SceneExplorer() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4" data-testid="explorer-results">
-          {!res && <p className="text-xs text-slate-500">Pan/zoom anywhere on Earth (or pick a preset), set dates, then search. Found scenes can be registered as VarunaNetra scenes; "Register + detect" runs the <span className="text-rose-300">⚠ experimental dark-spot detector</span> (Otsu thresholding on the SAR quicklook — low-wind areas and wakes cause false positives; every result is flagged low-confidence for analyst review).</p>}
+          {!res && <p className="text-xs text-slate-500">Pan/zoom to an investigation area, choose a collection and date range, then search. The searched map box is preserved as the analysis AOI. When a trained <span className="text-cyan-300">sar_spill_seg_v2</span> checkpoint and compatible VV+VH radiometry are available, “Register + detect” uses the dual-polarization U-Net; otherwise it falls back safely to the labelled baseline and reports why.</p>}
           {res && <p className="mb-2 font-mono text-[10px] text-slate-400" data-testid="explorer-count">{res.count} scenes{res.matched ? ` of ${res.matched} matched` : ""} · {res.source}</p>}
           <div className="space-y-2">
             {res?.scenes.map((s) => (
@@ -152,7 +161,7 @@ export default function SceneExplorer() {
                   <div className="mt-1.5 flex items-center gap-1.5">
                     {s.registered_scene_id ? <span className="rounded px-1.5 py-0.5 font-mono text-[10px] text-emerald-300" style={{ border: "1px solid rgba(16,185,129,0.4)" }} data-testid={`scene-registered-${s.stac_id}`}>registered</span>
                       : <button data-testid={`btn-register-${s.stac_id}`} onClick={() => register(s, false)} className="rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-200 hover:text-white" style={bd}>Register</button>}
-                    <button data-testid={`btn-register-detect-${s.stac_id}`} onClick={() => register(s, true)} className="inline-flex items-center gap-1 rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-purple-300 hover:bg-purple-400/10" style={{ borderColor: "rgba(157,78,221,0.5)" }}><Scan size={10} /> Register + detect ⚠</button>
+                    <button data-testid={`btn-register-detect-${s.stac_id}`} onClick={() => register(s, true)} className="inline-flex items-center gap-1 rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-purple-300 hover:bg-purple-400/10" style={{ borderColor: "rgba(157,78,221,0.5)" }}><Scan size={10} /> Register + detect</button>
                     <a href={s.stac_href} target="_blank" rel="noreferrer" className="ml-auto font-mono text-[10px] text-slate-500 hover:text-slate-300" data-testid={`stac-link-${s.stac_id}`}>STAC ↗</a>
                   </div>
                 </div>

@@ -29,7 +29,7 @@ jobs:
 
       - name: Correlation and detector guardrail tests
         working-directory: backend
-        run: pytest -q tests/test_correlation_golden.py tests/test_sar_segmentation_runtime.py
+        run: pytest -q tests/test_correlation_golden.py tests/test_sar_segmentation_runtime.py tests/test_sar_aoi_window.py
 
       - uses: actions/setup-node@v4
         with:
@@ -63,7 +63,7 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2,<3"
           pip install "numpy>=1.26,<3" pytest
 
-      - name: Load a temporary v2 checkpoint and run VV+VH inference
+      - name: Load a temporary v2 checkpoint and test promotion gate
         working-directory: backend
         run: pytest -q tests/test_sar_segmentation_v2_smoke.py
 

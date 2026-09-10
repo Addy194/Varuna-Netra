@@ -10,7 +10,6 @@ from geo import circle_polygon
 from models import CorrelateRequest, ReviewCreate, OverrideRequest, REASON_CODES, new_id
 from jobs import enqueue, process
 from services import apply_live_environment
-from report import build_pdf
 from storage import get_object
 
 router = APIRouter()
@@ -212,64 +211,18 @@ async def case_geojson(case_id: str, version: Optional[int] = None, user=Depends
     case = await _case(case_id)
     spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "raw_input": 0})
     result = await _result(case_id, version)
-    return clean(_geojson(case, spill, result))
-
-
-async def _bundle(case_id, version):
-    case = await _case(case_id)
-    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0})
-    scene = await db.scenes.find_one({"id": case["scene_id"]}, {"_id": 0}) if case.get("scene_id") else None
-    result = await _result(case_id, version)
-    all_versions = await db.correlation_results.find({"case_id": case_id}, {"_id": 0, "candidates": 0, "processing_log": 0}).sort("version", 1).to_list(100)
-    reviews = await db.reviews.find({"case_id": case_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
-    entity_ids = [case_id, spill["id"]] + ([scene["id"]] if scene else [])
-    audit_events = await db.audit_events.find({"entity_id": {"$in": entity_ids}}, {"_id": 0}).sort("created_at", 1).to_list(2000)
-    jobs = await db.jobs.find({"payload.case_id": case_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
-    attachments = await db.attachments.find({"case_id": case_id, "is_deleted": False}, {"_id": 0}).sort("created_at", 1).to_list(200)
-    feedback = await db.detector_feedback.find({"case_id": case_id}, {"_id": 0}).sort("created_at", 1).to_list(100)
-    calculations = None
-    if result:
-        calculations = {"algorithm_version": result["algorithm_version"], "input_hash": result["input_hash"], "params": result["params"],
-                        "environment": result["environment"], "degraded": result["degraded"], "spill_axis_bearing": result["spill_axis_bearing"],
-                        "candidates": [{k: v for k, v in c.items() if k != "track"} for c in result["candidates"]],
-                        "processing_log": result["processing_log"]}
-    return clean({
-        "case": case,
-        "source_references": {"scene": scene, "spill_observation": spill, "storage_ref": scene.get("storage_ref") if scene else None,
-                              "ais_fix_ids": [fid for c in (result or {}).get("candidates", []) for fid in c["evidence"]["fix_ids"]]},
-        "geometries": _geojson(case, {k: v for k, v in spill.items() if k != "raw_input"}, result),
-        "calculations": calculations,
-        "result_versions": all_versions,
-        "reviews": reviews,
-        "audit_history": audit_events,
-        "jobs": jobs,
-        "attachments": attachments,
-        "detector_feedback": feedback,
-        "disclaimer": "Decision-support evidence bundle. Correlation output indicates possible/probable association only; responsibility requires analyst confirmation and corroborating evidence.",
-    })
+    return _geojson(case, spill, result)
 
 
 @router.get("/cases/{case_id}/evidence")
-async def case_evidence(case_id: str, version: Optional[int] = None, user=Depends(get_current_user)):
-    return await _bundle(case_id, version)
-
-
-@router.get("/cases/{case_id}/evidence.pdf")
-async def case_evidence_pdf(case_id: str, version: Optional[int] = None, user=Depends(get_current_user)):
-    bundle = await _bundle(case_id, version)
-    bundle["generated_by"] = f"{user.get('name')} <{user['email']}> ({user['role']})"
-    images = []
-    for att in bundle["attachments"]:
-        if att.get("is_image") and len(images) < 6:
-            try:
-                data, _ = await get_object(att["storage_path"])
-                images.append({"caption": att.get("caption") or att["original_filename"], "meta": f"{att['kind']} · {att['original_filename']} · uploaded by {att['uploaded_by']}", "bytes": data})
-            except Exception as e:  # noqa: BLE001
-                images.append({"caption": att.get("caption") or att["original_filename"], "meta": f"fetch failed: {str(e)[:80]}", "bytes": None})
-    bundle["attachment_images"] = images
+async def evidence_bundle(case_id: str, user=Depends(get_current_user)):
+    case = await _case(case_id)
+    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "raw_input": 0})
+    result = await _result(case_id, None)
+    reviews = await db.reviews.find({"case_id": case_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    bundle = {"case": case, "spill_observation": spill, "correlation_result": result, "reviews": reviews}
     try:
-        from playbook import playbook_for_case
-        bundle["playbook"] = await playbook_for_case(case_id)
+        bundle["playbook"] = await db.playbooks.find_one({"case_id": case_id}, {"_id": 0})
     except Exception:  # noqa: BLE001
         bundle["playbook"] = None
     try:
@@ -277,6 +230,14 @@ async def case_evidence_pdf(case_id: str, version: Optional[int] = None, user=De
         bundle["vulnerability"] = await assess(case_id)
     except Exception:  # noqa: BLE001
         bundle["vulnerability"] = None
+    return clean(bundle)
+
+
+@router.get("/cases/{case_id}/evidence.pdf")
+async def evidence_pdf(case_id: str, user=Depends(get_current_user)):
+    bundle = await evidence_bundle(case_id, user)
+    # Keep the PDF stack out of normal API startup. This import is intentionally lazy.
+    from report import build_pdf
     pdf = build_pdf(bundle)
     await audit("case", case_id, "evidence.exported", {"format": "pdf", "version": bundle["case"].get("latest_result_version"), "bytes": len(pdf)}, user["email"])
     return Response(content=pdf, media_type="application/pdf",

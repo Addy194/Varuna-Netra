@@ -3,6 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from shapely.geometry import box, shape
 
 from auth import get_current_user, require_role
 from db import db, clean, audit
@@ -11,6 +12,26 @@ from satellite import COLLECTIONS, STAC, search_scenes, get_item, fetch_preview
 from services import create_scene
 
 router = APIRouter()
+
+
+def _valid_bbox(value: List[float] | None, label: str = "bbox") -> list[float] | None:
+    if value is None:
+        return None
+    if len(value) != 4:
+        raise HTTPException(400, f"{label} must be [west, south, east, north]")
+    w, s, e, n = [float(x) for x in value]
+    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
+        raise HTTPException(400, f"{label} must be [west, south, east, north]")
+    return [w, s, e, n]
+
+
+def _validate_analysis_bbox(value: List[float] | None, footprint: dict) -> list[float] | None:
+    aoi = _valid_bbox(value, "analysis_bbox")
+    if aoi is None:
+        return None
+    if not shape(footprint).intersects(box(*aoi)):
+        raise HTTPException(400, "analysis_bbox does not intersect the selected satellite scene")
+    return aoi
 
 
 class SceneSearch(BaseModel):
@@ -35,9 +56,7 @@ async def collections(user=Depends(get_current_user)):
 async def search(body: SceneSearch, user=Depends(get_current_user)):
     if body.collection not in COLLECTIONS:
         raise HTTPException(400, f"collection must be one of {list(COLLECTIONS)}")
-    w, s, e, n = body.bbox
-    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
-        raise HTTPException(400, "bbox must be [west, south, east, north]")
+    w, s, e, n = _valid_bbox(body.bbox) or body.bbox
     if (e - w) * (n - s) > 3600:
         raise HTTPException(400, "search area too large — zoom in (keep the box under ~60°×60°)")
     try:
@@ -48,6 +67,7 @@ async def search(body: SceneSearch, user=Depends(get_current_user)):
     ids = {s["provider_scene_id"]: s["id"] for s in await db.scenes.find({"provider_scene_id": {"$in": list(registered)}}, {"provider_scene_id": 1, "id": 1}).to_list(200)}
     for sc in res["scenes"]:
         sc["registered_scene_id"] = ids.get(sc["stac_id"])
+        sc["analysis_bbox"] = body.bbox
     await audit("satellite", body.collection, "satellite.searched", {"bbox": body.bbox, "start": body.start, "end": body.end, "count": res["count"]}, user["email"])
     return res
 
@@ -56,38 +76,54 @@ class RegisterRequest(BaseModel):
     collection: str
     stac_id: str
     detect: bool = False
+    analysis_bbox: Optional[List[float]] = Field(default=None, min_length=4, max_length=4)
+
+
+async def _detect_registered_scene(scene: dict, user: dict) -> dict:
+    from detector import detect_scene
+    try:
+        det = await detect_scene(scene, user["email"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"detector failed: {str(e)[:200]}")
+    first = det["cases"][0] if det.get("cases") else None
+    case = await db.cases.find_one({"id": first["case_id"]}, {"_id": 0}) if first else None
+    return {"detection": det, "case": case, "detector_note": det["note"]}
 
 
 @router.post("/satellite/register", status_code=201)
 async def register(body: RegisterRequest, user=Depends(require_role("analyst"))):
     if body.collection not in COLLECTIONS:
         raise HTTPException(400, "unknown collection")
+
     existing = await db.scenes.find_one({"provider_scene_id": body.stac_id}, {"_id": 0})
     if existing:
-        return clean({"scene": existing, "already_registered": True})
+        aoi = _validate_analysis_bbox(body.analysis_bbox, existing["footprint"])
+        if aoi is not None:
+            await db.scenes.update_one({"id": existing["id"]}, {"$set": {"metadata.analysis_bbox": aoi}})
+            existing.setdefault("metadata", {})["analysis_bbox"] = aoi
+        out = {"scene": existing, "already_registered": True}
+        if body.detect:
+            out.update(await _detect_registered_scene(existing, user))
+        return clean(out)
+
     try:
         it = await get_item(body.collection, body.stac_id)
     except Exception as ex:  # noqa: BLE001
         raise HTTPException(502, f"STAC item fetch failed: {str(ex)[:200]}")
+
+    analysis_bbox = _validate_analysis_bbox(body.analysis_bbox, it["footprint"])
     payload = SceneCreate(provider=it["provider"], provider_scene_id=it["stac_id"], sensor_mode=it.get("instrument_mode") or it.get("product_type"),
                           polarization="+".join(it["polarizations"]) if it.get("polarizations") else None, acquisition_time=it["datetime"],
                           footprint=it["footprint"], storage_ref=it["stac_href"],
                           metadata={"stac_collection": it["collection"], "platform": it.get("platform"), "orbit_state": it.get("orbit_state"), "relative_orbit": it.get("relative_orbit"), "bbox": it.get("bbox"),
-                                    "cloud_cover": it.get("cloud_cover"), "preview_href": it.get("preview_href"), "thumbnail_href": it.get("thumbnail_href"), "vv_href": it.get("vv_href"), "vh_href": it.get("vh_href"), "assets": it.get("assets"), "source": "Microsoft Planetary Computer STAC"})
+                                    "analysis_bbox": analysis_bbox, "cloud_cover": it.get("cloud_cover"), "preview_href": it.get("preview_href"), "thumbnail_href": it.get("thumbnail_href"), "vv_href": it.get("vv_href"), "vh_href": it.get("vh_href"), "assets": it.get("assets"), "source": "Microsoft Planetary Computer STAC"})
     try:
         scene = await create_scene(payload, user["email"])
     except ValueError as e:
         raise HTTPException(400, str(e))
     out = {"scene": scene, "already_registered": False}
     if body.detect:
-        from detector import detect_scene
-        try:
-            det = await detect_scene(scene, user["email"])
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(502, f"detector failed: {str(e)[:200]}")
-        first = det["cases"][0] if det.get("cases") else None
-        case = await db.cases.find_one({"id": first["case_id"]}, {"_id": 0}) if first else None
-        out.update({"detection": det, "case": case, "detector_note": det["note"]})
+        out.update(await _detect_registered_scene(scene, user))
     return clean(out)
 
 

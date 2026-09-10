@@ -106,7 +106,11 @@ def stratified_scene_split(
 
 
 def read_sar(path: Path) -> np.ndarray:
-    """Read dual-polarization Sigma0 dB data as CxHxW float32."""
+    """Read dual-polarization Sigma0 dB data as CxHxW float32.
+
+    The selected dataset publishes two-channel VV/VH TIFFs. The pipeline uses
+    band 1 as VV and band 2 as VH consistently for training and inference.
+    """
     with rasterio.open(path) as ds:
         if ds.count < 2:
             raise ValueError(f"Expected VV+VH two-band TIFF, got {ds.count} band(s): {path}")
@@ -152,11 +156,21 @@ class SentinelOilTileDataset(Dataset):
         self.db_min = db_min
         self.db_max = db_max
         self.seed = seed
+        self.epoch = 0
         if not scenes:
             raise ValueError("At least one scene is required")
 
     def __len__(self):
         return len(self.scenes) * self.tiles_per_scene
+
+    def set_epoch(self, epoch: int):
+        """Change deterministic training crops between epochs.
+
+        Calling this on the training dataset before each DataLoader iteration gives
+        new crops every epoch while keeping the entire run reproducible by seed.
+        Validation can simply remain at epoch 0 for stable model selection.
+        """
+        self.epoch = int(epoch)
 
     def _crop_origin(self, mask: np.ndarray, rng: np.random.Generator) -> tuple[int, int]:
         h, w = mask.shape
@@ -176,8 +190,12 @@ class SentinelOilTileDataset(Dataset):
         scene_index = index // self.tiles_per_scene
         repeat_index = index % self.tiles_per_scene
         scene = self.scenes[scene_index]
-        # Deterministic for a given ordering/run, which makes experiments reproducible.
-        rng = np.random.default_rng(self.seed + scene_index * 1009 + repeat_index * 9176)
+        rng = np.random.default_rng(
+            self.seed
+            + self.epoch * 1_000_003
+            + scene_index * 1009
+            + repeat_index * 9176
+        )
         image = read_sar(scene.image)
         mask = read_mask(scene.mask, image.shape[1:])
         y, x = self._crop_origin(mask, rng)

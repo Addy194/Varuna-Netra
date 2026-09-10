@@ -142,50 +142,127 @@ async def generate_quicklook(scene: dict) -> bytes:
 
 
 def scene_status_summary(scene: Optional[dict], case: dict) -> dict:
-    """Cheap, network-free summary for GET /cases/{id}; derived from persisted scene state only."""
+    """Cheap, network-free summary for GET /cases/{id}; derived from persisted scene state only. Distinct failure states, never one generic warning."""
+    att = case.get("scene_attachment") or {}
+    last = case.get("scene_search") or {}
     if not case.get("scene_id"):
-        return {"scene_id": None, "state": "SAR_UNAVAILABLE", "sar_available": False, "quicklook_available": False, "analysis_asset": None, "reason": "No Sentinel scene attached to this case"}
+        if last.get("state") in ("NO_COVERAGE_7D", "STAC_FAILED", "NEAREST_FOUND_EXTENDED"):
+            return {"scene_id": None, "state": last["state"], "sar_available": False, "quicklook_available": False, "analysis_asset": None, "reason": last.get("reason"), "sar_confirmation": "PENDING", "search": last}
+        return {"scene_id": None, "state": "NO_SCENE_SELECTED", "sar_available": False, "quicklook_available": False, "analysis_asset": None, "reason": "No Sentinel-1 scene attached yet — run the acquisition search", "sar_confirmation": "PENDING", "search": last or None}
     if not scene:
-        return {"scene_id": case["scene_id"], "state": "SAR_UNAVAILABLE", "sar_available": False, "quicklook_available": False, "analysis_asset": None, "reason": "Sentinel scene metadata unavailable (scene record missing)"}
+        return {"scene_id": case["scene_id"], "state": "ATTACH_FAILED", "sar_available": False, "quicklook_available": False, "analysis_asset": None, "reason": "Sentinel scene metadata unavailable (scene record missing)", "sar_confirmation": "PENDING"}
     md, inv = scene.get("metadata") or {}, scene.get("assets") or {}
     sar = bool(_stac_collection(scene)) and (inv.get("analysis_asset") is not None if inv else True)
     ql = bool(scene.get("quicklook_path") or md.get("preview_href") or md.get("thumbnail_href"))
-    state = "SAR_UNAVAILABLE" if not sar else ("QUICKLOOK_GENERATING" if scene.get("quicklook_status") == "generating" else "SAR_READY")
-    return {"scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "collection": _stac_collection(scene), "acquisition_time": scene["acquisition_time"],
+    state = "SAR_ASSET_UNAVAILABLE" if not sar else ("QUICKLOOK_GENERATING" if scene.get("quicklook_status") == "generating" else "SAR_READY")
+    return {"scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "collection": _stac_collection(scene), "acquisition_time": scene["acquisition_time"], "platform": md.get("platform"), "polarization": scene.get("polarization"),
             "sar_available": sar, "quicklook_available": ql, "quicklook_kind": scene.get("quicklook_kind") or ("native" if ql else None), "quicklook_status": scene.get("quicklook_status") or ("ready" if scene.get("quicklook_path") else "available" if ql else "none"),
-            "analysis_asset": inv.get("analysis_asset") or ("vv" if sar else None), "available_assets": inv.get("available_assets"), "state": state,
+            "analysis_asset": inv.get("analysis_asset") or ("vv" if sar else None), "available_assets": inv.get("available_assets"), "state": state, "sar_confirmation": "READY" if sar else "PENDING",
+            "time_difference_hours": att.get("time_difference_hours"), "overlap_percent": att.get("overlap_percent"), "search_window_hours": att.get("search_window_hours"), "auto": att.get("auto"), "attached_at": att.get("attached_at"),
             "reason": None if sar else "SAR asset missing — scene was registered manually without Sentinel-1 STAC imagery"}
 
 
-async def auto_attach_scene(case: dict, actor: str, window_h: int = 6) -> dict:
-    """Find the real Sentinel-1 GRD scene covering the spill centroid nearest to acquisition time; register + attach it."""
+STAGES_H = (36, 72, 120, 168)
+FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _spill_aoi(spill: dict, buffer_deg: float = 0.05) -> tuple[dict, object]:
+    """Real spill polygon (repaired) buffered by a small margin — never a fixed point. Validates lon/lat order & range."""
+    from shapely.geometry import shape, mapping
+    from shapely.validation import make_valid
+    g = make_valid(shape(spill["geometry"])).buffer(buffer_deg)
+    minx, miny, maxx, maxy = g.bounds
+    if not (-180 <= minx <= maxx <= 180 and -90 <= miny <= maxy <= 90):
+        raise SceneAssetError("invalid_aoi", f"spill geometry out of range (lon {minx}..{maxx}, lat {miny}..{maxy}) — coordinates must be [lon, lat]")
+    return mapping(g), g
+
+
+def rank_scenes(scenes: list, aoi_geom, t: datetime, window_h: int) -> list:
+    from shapely.geometry import shape
+    out = []
+    for s in scenes:
+        dt = datetime.fromisoformat(s["datetime"].replace("Z", "+00:00"))
+        diff_h = abs((dt - t).total_seconds()) / 3600
+        try:
+            fp = shape(s["footprint"]) if s.get("footprint") else None
+            overlap = (fp.intersection(aoi_geom).area / aoi_geom.area * 100) if fp is not None and aoi_geom.area else None
+        except Exception:  # noqa: BLE001
+            overlap = None
+        sar = bool(s.get("sar_assets"))
+        score = 0.5 * ((overlap or 0) / 100) + 0.4 * max(0.0, 1 - diff_h / max(window_h, 1)) + 0.1 * (1 if sar else 0)
+        out.append({"scene_id": s["stac_id"], "collection": s["collection"], "acquisition_time": s["datetime"], "time_difference_hours": round(diff_h, 2), "signed_offset_hours": round((dt - t).total_seconds() / 3600, 2),
+                    "overlap_percent": round(overlap, 1) if overlap is not None else None, "sar_available": sar, "sar_assets": s.get("sar_assets"), "polarization": s.get("polarizations"),
+                    "platform": s.get("platform"), "orbit_state": s.get("orbit_state"), "relative_orbit": s.get("relative_orbit"), "instrument_mode": s.get("instrument_mode"), "footprint": s.get("footprint"), "bbox": s.get("bbox"),
+                    "preview": f"/satellite/preview?collection={s['collection']}&stac_id={s['stac_id']}" if s.get("preview_href") or s.get("thumbnail_href") else None, "score": round(score, 3), "_item": s})
+    out.sort(key=lambda r: -r["score"])
+    return out
+
+
+async def nearest_scenes(spill: dict, t: datetime, max_hours: int = 168, collection: str = "sentinel-1-grd") -> dict:
+    """Adaptive staged search (±36 h → ±72 h → ±5 d → ±7 d) with STAC intersects on the real spill AOI. Returns the stage that produced results."""
+    aoi, aoi_geom = _spill_aoi(spill)
+    stages_tried = []
+    for w in [s for s in STAGES_H if s <= max_hours] or [max_hours]:
+        try:
+            res = await search_scenes(None, (t - timedelta(hours=w)).strftime(FMT), (t + timedelta(hours=w)).strftime(FMT), collection, 50, intersects=aoi)
+        except Exception as e:  # noqa: BLE001
+            return {"found": False, "state": "STAC_FAILED", "reason": f"STAC search failed: {str(e)[:140]}", "stages_tried": stages_tried, "aoi": aoi, "target_time": t}
+        stages_tried.append({"window_hours": w, "scenes": res["count"]})
+        if res["scenes"]:
+            ranked = rank_scenes(res["scenes"], aoi_geom, t, w)
+            state = "FOUND_36H" if w == STAGES_H[0] else "NEAREST_FOUND_EXTENDED"
+            return {"found": True, "state": state, "search_window_hours": w, "stages_tried": stages_tried, "candidates": ranked, "aoi": aoi, "target_time": t, "collection": collection,
+                    "reason": None if w == STAGES_H[0] else f"No acquisition within ±{STAGES_H[0]} h; nearest found in the ±{w} h window"}
+    return {"found": False, "state": "NO_COVERAGE_7D", "reason": f"No Sentinel-1 acquisition intersects this AOI within ±{max_hours // 24} days of {t.strftime(FMT)} — satellite revisit gap. AIS/jurisdiction investigation can continue (SAR confirmation pending).",
+            "stages_tried": stages_tried, "aoi": aoi, "target_time": t, "collection": collection}
+
+
+async def register_stac_item(it: dict, actor: str) -> dict:
     from services import create_scene
     from models import SceneCreate
-    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "centroid": 1, "acquisition_time": 1})
-    lon, lat = spill["centroid"]["coordinates"]
-    t = to_utc(spill["acquisition_time"])
-    fmt = "%Y-%m-%dT%H:%M:%SZ"
-    try:
-        res = await search_scenes([lon - 0.01, lat - 0.01, lon + 0.01, lat + 0.01], (t - timedelta(hours=window_h)).strftime(fmt), (t + timedelta(hours=window_h)).strftime(fmt), "sentinel-1-grd", 10)
-    except Exception as e:  # noqa: BLE001
-        raise SceneAssetError("stac_unavailable", f"Sentinel scene metadata unavailable: STAC search failed ({str(e)[:100]})")
-    if not res["scenes"]:
-        raise SceneAssetError("no_scene", f"No Sentinel scene selected and no Sentinel-1 GRD acquisition covers the spill within ±{window_h} h of {t.strftime(fmt)}")
-    it = min(res["scenes"], key=lambda s: abs((datetime.fromisoformat(s["datetime"].replace("Z", "+00:00")) - t).total_seconds()))
     existing = await db.scenes.find_one({"provider_scene_id": it["stac_id"]}, {"_id": 0})
-    if not existing:
-        payload = SceneCreate(provider=it["provider"], provider_scene_id=it["stac_id"], sensor_mode=it.get("instrument_mode"), polarization="+".join(it["polarizations"]) if it.get("polarizations") else None,
-                              acquisition_time=it["datetime"], footprint=it["footprint"], storage_ref=it["stac_href"],
-                              metadata={"stac_collection": it["collection"], "platform": it.get("platform"), "orbit_state": it.get("orbit_state"), "relative_orbit": it.get("relative_orbit"), "bbox": it.get("bbox"),
-                                        "preview_href": it.get("preview_href"), "thumbnail_href": it.get("thumbnail_href"), "source": "Microsoft Planetary Computer STAC"})
-        existing = await create_scene(payload, actor)
-    await attach_scene(case, existing, actor, auto=True)
-    return existing
+    if existing:
+        return existing
+    payload = SceneCreate(provider=it["provider"], provider_scene_id=it["stac_id"], sensor_mode=it.get("instrument_mode"), polarization="+".join(it["polarizations"]) if it.get("polarizations") else None,
+                          acquisition_time=it["datetime"], footprint=it["footprint"], storage_ref=it["stac_href"],
+                          metadata={"stac_collection": it["collection"], "platform": it.get("platform"), "orbit_state": it.get("orbit_state"), "relative_orbit": it.get("relative_orbit"), "bbox": it.get("bbox"),
+                                    "preview_href": it.get("preview_href"), "thumbnail_href": it.get("thumbnail_href"), "sar_assets": it.get("sar_assets"), "source": "Microsoft Planetary Computer STAC"})
+    return await create_scene(payload, actor)
 
 
-async def attach_scene(case: dict, scene: dict, actor: str, auto: bool = False) -> None:
+async def _remember_search(case_id: str, res: dict):
+    await db.cases.update_one({"id": case_id}, {"$set": {"scene_search": {"state": res["state"], "reason": res.get("reason"), "stages_tried": res.get("stages_tried"), "search_window_hours": res.get("search_window_hours"),
+                                                                         "candidates": [{k: v for k, v in c.items() if k not in ("_item", "footprint")} for c in res.get("candidates", [])[:10]], "at": datetime.now(timezone.utc)}}})
+
+
+async def auto_attach_scene(case: dict, actor: str, max_hours: int = 168) -> dict:
+    """Adaptive search on the real spill AOI; attaches the best-ranked real Sentinel-1 GRD scene. Raises a state-specific SceneAssetError otherwise."""
+    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "geometry": 1, "centroid": 1, "acquisition_time": 1})
+    t = to_utc(spill["acquisition_time"])
+    res = await nearest_scenes(spill, t, max_hours)
+    await _remember_search(case["id"], res)
+    if not res["found"]:
+        raise SceneAssetError(res["state"].lower(), res["reason"])
+    best = res["candidates"][0]
+    scene = await register_stac_item(best["_item"], actor)
+    await attach_scene(case, scene, actor, auto=True, rank=best, window_h=res["search_window_hours"])
+    return scene
+
+
+async def attach_scene(case: dict, scene: dict, actor: str, auto: bool = False, rank: Optional[dict] = None, window_h: Optional[int] = None) -> None:
     now = datetime.now(timezone.utc)
-    await db.cases.update_one({"id": case["id"]}, {"$set": {"scene_id": scene["id"], "scene_attachment": {"scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "collection": _stac_collection(scene),
-                                                                                                         "attached_at": now, "attached_by": actor, "auto": auto}}})
+    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "geometry": 1, "acquisition_time": 1})
+    t = to_utc(spill["acquisition_time"])
+    if rank is None:  # manual selection: compute the same truthful metrics from persisted scene metadata
+        _, aoi_geom = _spill_aoi(spill)
+        rank = rank_scenes([{"stac_id": scene["provider_scene_id"], "collection": _stac_collection(scene), "datetime": to_utc(scene["acquisition_time"]).strftime(FMT), "footprint": scene.get("footprint"),
+                             "sar_assets": (scene.get("metadata") or {}).get("sar_assets") or (["vv"] if _stac_collection(scene) else []), "polarizations": (scene.get("polarization") or "").split("+") if scene.get("polarization") else None,
+                             "platform": (scene.get("metadata") or {}).get("platform"), "bbox": (scene.get("metadata") or {}).get("bbox")}], aoi_geom, t, window_h or STAGES_H[0])[0]
+    md = scene.get("metadata") or {}
+    attachment = {"case_id": case["id"], "spill_id": case["spill_observation_id"], "scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "collection": _stac_collection(scene), "provider": scene.get("provider"),
+                  "acquisition_time": scene["acquisition_time"], "scene_bbox": md.get("bbox"), "scene_geometry": scene.get("footprint"), "analysis_asset_key": (scene.get("assets") or {}).get("analysis_asset") or ("vv" if _stac_collection(scene) else None),
+                  "time_difference_hours": rank["time_difference_hours"], "signed_offset_hours": rank.get("signed_offset_hours"), "overlap_percent": rank.get("overlap_percent"), "search_window_hours": window_h, "score": rank.get("score"),
+                  "attached_at": now, "attached_by": actor, "auto": auto}
+    await db.cases.update_one({"id": case["id"]}, {"$set": {"scene_id": scene["id"], "scene_attachment": attachment}})
     await db.spill_observations.update_one({"id": case["spill_observation_id"]}, {"$set": {"scene_id": scene["id"]}})
-    await audit("case", case["id"], "case.scene_attached", {"scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "auto": auto}, actor)
+    await audit("case", case["id"], "case.scene_attached", {"scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "auto": auto, "time_difference_hours": rank["time_difference_hours"]}, actor)

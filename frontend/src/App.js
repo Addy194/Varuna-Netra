@@ -7,7 +7,7 @@ import { Layout } from "@/components/Layout";
 import Dashboard from "@/pages/Dashboard";
 import CaseDetail from "@/pages/CaseDetail";
 import Ingest from "@/pages/Ingest";
-import Jobs from "@/pages/Jobs";
+import Alerts from "@/pages/Jobs";
 import Login from "@/pages/Login";
 import Users from "@/pages/Users";
 import Zones from "@/pages/Zones";
@@ -58,7 +58,7 @@ function App() {
               <Route path="/archive/:id" element={<EvidenceVault />} />
               <Route path="/health" element={<SystemHealth />} />
               <Route path="/ingest" element={<Ingest />} />
-              <Route path="/jobs" element={<Jobs />} />
+              <Route path="/alerts" element={<Alerts />} /><Route path="/jobs" element={<Alerts />} />
               <Route path="/users" element={<Protected role="admin"><Users /></Protected>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

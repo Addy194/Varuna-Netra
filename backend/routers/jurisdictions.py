@@ -1,13 +1,16 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+import aoi
+import ais_live
+from aoi import bbox_of
 from auth import get_current_user, require_role
 from db import db, clean, audit
 from geo import validate_polygon
-from jurisdiction import ZONE_TYPES, apply_to_case
+from jurisdiction import ZONE_TYPES, apply_to_case, lookup, provenance_of, zone_public
 from models import GeoJSONGeometry, new_id
 
 router = APIRouter()
@@ -35,15 +38,126 @@ class ZoneUpdate(BaseModel):
 
 
 @router.get("/jurisdictions")
-async def list_zones(user=Depends(get_current_user)):
-    return clean(await db.jurisdictions.find({}, {"_id": 0}).sort("code", 1).to_list(500))
+async def list_zones(q: Optional[str] = None, zone_type: Optional[str] = None, country: Optional[str] = None, active: Optional[bool] = None, include_geometry: bool = False,
+                     limit: int = Query(100, le=500), offset: int = Query(0, ge=0), user=Depends(get_current_user)):
+    """Paginated zone catalogue WITHOUT geometry by default (worldwide dataset is too large for the browser); use /jurisdictions/geojson for map features."""
+    flt = {}
+    if q:
+        rx = {"$regex": q.strip(), "$options": "i"}
+        flt["$or"] = [{"code": rx}, {"name": rx}, {"country": rx}, {"country_name": rx}, {"territory": rx}, {"authority": rx}]
+    if zone_type:
+        flt["zone_type"] = zone_type
+    if country:
+        flt["country"] = country.upper()
+    if active is not None:
+        flt["active"] = active
+    proj = {"_id": 0, "geometry_low": 0} if include_geometry else {"_id": 0, "geometry": 0, "geometry_low": 0}
+    total = await db.jurisdictions.count_documents(flt)
+    rows = await db.jurisdictions.find(flt, proj).sort([("country", 1), ("zone_type", 1), ("code", 1)]).skip(offset).to_list(limit)
+    for z in rows:
+        z["provenance"] = provenance_of(z)
+    ds = await db.settings.find_one({"key": "jurisdiction_dataset"}, {"_id": 0})
+    return clean({"total": total, "offset": offset, "limit": limit, "zones": rows, "dataset": ds,
+                  "by_type": {r["_id"]: r["n"] for r in await db.jurisdictions.aggregate([{"$match": {"active": True}}, {"$group": {"_id": "$zone_type", "n": {"$sum": 1}}}]).to_list(10)},
+                  "countries": await db.jurisdictions.distinct("country", {"active": True})})
+
+
+def _bbox_poly(bbox: str) -> dict:
+    try:
+        w, s, e, n = [float(x) for x in bbox.split(",")]
+    except ValueError:
+        raise HTTPException(400, "bbox must be west,south,east,north")
+    w, e = max(-180.0, w), min(180.0, e)
+    s, n = max(-89.9, s), min(89.9, n)
+    if w >= e or s >= n:
+        raise HTTPException(400, "bbox must be west,south,east,north with west<east and south<north")
+    if e - w >= 359:  # whole-world view: 2dsphere cannot index a full-sphere polygon; use two hemispheres
+        return {"type": "MultiPolygon", "coordinates": [[[[-179.99, s], [0, s], [0, n], [-179.99, n], [-179.99, s]]], [[[0, s], [179.99, s], [179.99, n], [0, n], [0, s]]]]}
+    return {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
 
 
 @router.get("/jurisdictions/geojson")
-async def zones_geojson(user=Depends(get_current_user)):
-    zones = await db.jurisdictions.find({"active": True}, {"_id": 0}).to_list(500)
-    return {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": z["geometry"],
-            "properties": {k: z[k] for k in ("id", "code", "name", "authority", "country", "zone_type") if k in z}} for z in zones]}
+async def zones_geojson(bbox: Optional[str] = None, zone_type: Optional[str] = None, country: Optional[str] = None, detail: str = "low", ids: Optional[str] = None,
+                        limit: int = Query(150, le=400), user=Depends(get_current_user)):
+    """Viewport-driven features: only zones intersecting the bbox, simplified geometry unless detail=high."""
+    flt = {"active": True}
+    if bbox:
+        flt["geometry"] = {"$geoIntersects": {"$geometry": _bbox_poly(bbox)}}
+    if zone_type:
+        flt["zone_type"] = {"$in": zone_type.split(",")}
+    if country:
+        flt["country"] = country.upper()
+    if ids:
+        flt["$or"] = [{"id": {"$in": ids.split(",")}}, {"code": {"$in": ids.split(",")}}]
+    if not bbox and not ids and not country:
+        raise HTTPException(400, "provide bbox (viewport), ids or country — the worldwide dataset is never sent whole")
+    zones = await db.jurisdictions.find(flt, {"_id": 0}).to_list(limit)
+    feats = []
+    for z in zones:
+        g = z.get("geometry_low") if detail == "low" and z.get("geometry_low") else z["geometry"]
+        feats.append({"type": "Feature", "geometry": g, "properties": {**zone_public(z), "detail": "low" if g is z.get("geometry_low") else "high", "bbox": z.get("bbox")}})
+    return {"type": "FeatureCollection", "features": feats, "count": len(feats), "truncated": len(zones) >= limit, "detail": detail}
+
+
+@router.get("/jurisdictions/{zone_id}/geometry")
+async def zone_geometry(zone_id: str, detail: str = "high", user=Depends(get_current_user)):
+    z = await db.jurisdictions.find_one({"$or": [{"id": zone_id}, {"code": zone_id}]}, {"_id": 0})
+    if not z:
+        raise HTTPException(404, "zone not found")
+    g = z.get("geometry_low") if detail == "low" and z.get("geometry_low") else z["geometry"]
+    return clean({"type": "Feature", "geometry": g, "properties": {**zone_public(z), "bbox": z.get("bbox") or bbox_of(z["geometry"]), "dataset": z.get("dataset"), "area_km2": z.get("area_km2"), "vertices": z.get("vertices")}})
+
+
+class LookupBody(BaseModel):
+    geometry: Optional[GeoJSONGeometry] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+@router.post("/jurisdictions/lookup")
+async def jurisdiction_lookup(body: LookupBody, user=Depends(get_current_user)):
+    """Geospatial intersection → country / zone / provenance. inside_zone=false for high seas; never infers legal responsibility."""
+    if body.geometry:
+        geom = body.geometry.model_dump()
+    elif body.lat is not None and body.lon is not None:
+        geom = {"type": "Point", "coordinates": [body.lon, body.lat]}
+    else:
+        raise HTTPException(400, "provide geometry or lat/lon")
+    try:
+        return clean(await lookup(geom))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class AoiSelect(BaseModel):
+    kind: str
+    zone_id: Optional[str] = None
+    preset: Optional[str] = None
+    geometry: Optional[GeoJSONGeometry] = None
+    name: Optional[str] = None
+    apply_ais: bool = True
+
+
+@router.get("/aoi")
+async def get_aoi(user=Depends(get_current_user)):
+    cur = await aoi.current()
+    return clean({"aoi": cur, "presets": {k: {**v} for k, v in aoi.PRESETS.items()}, "ais_coverage": await ais_live.get_coverage()})
+
+
+@router.post("/aoi/select")
+async def select_aoi(body: AoiSelect, user=Depends(require_role("analyst"))):
+    try:
+        doc = await aoi.select(body.kind, user["email"], body.zone_id, body.geometry.model_dump() if body.geometry else None, body.preset, body.name, body.apply_ais)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await audit("settings", "investigation_aoi", "aoi.selected", {"kind": body.kind, "ref": doc.get("ref"), "bbox": doc["bbox"], "ais_boxes": len(doc["ais_bboxes_swne"])}, user["email"])
+    return clean(doc)
+
+
+@router.delete("/aoi")
+async def clear_aoi(user=Depends(require_role("analyst"))):
+    await audit("settings", "investigation_aoi", "aoi.cleared", {}, user["email"])
+    return clean(await aoi.clear(user["email"]))
 
 
 @router.post("/jurisdictions", status_code=201)
@@ -57,7 +171,7 @@ async def create_zone(body: ZoneCreate, user=Depends(require_role("admin"))):
     if await db.jurisdictions.find_one({"code": body.code}):
         raise HTTPException(400, "zone code already exists")
     now = datetime.now(timezone.utc)
-    doc = {**body.model_dump(), "id": new_id(), "source": f"uploaded by {user['email']}", "created_at": now, "updated_at": now}
+    doc = {**body.model_dump(), "id": new_id(), "source": f"uploaded by {user['email']}", "provenance": "USER-DEFINED", "authority_status": "USER-DEFINED", "official": False, "bbox": bbox_of(body.geometry.model_dump()), "created_at": now, "updated_at": now}
     await db.jurisdictions.insert_one(dict(doc))
     await audit("jurisdiction", doc["id"], "jurisdiction.created", {"code": body.code, "zone_type": body.zone_type}, user["email"])
     return clean(doc)

@@ -1,21 +1,73 @@
 from datetime import datetime, timezone
 
-from shapely.geometry import shape
+from shapely.geometry import shape, mapping
+from shapely.validation import make_valid
 
 from db import db, audit
 from geo import validate_polygon
 from models import new_id
 
-ZONE_TYPES = ["eez", "territorial", "port_state", "custom"]
+
+def _repair(geometry: dict) -> dict:
+    """Tolerate stored reference geometry quirks (nested shells after hole removal) before strict validation."""
+    g = shape(geometry)
+    if g.geom_type in ("Polygon", "MultiPolygon") and not g.is_valid:
+        g = make_valid(g).buffer(0)
+        if g.geom_type == "GeometryCollection":
+            from shapely.ops import unary_union
+            g = unary_union([p for p in g.geoms if p.geom_type in ("Polygon", "MultiPolygon")])
+        return mapping(g)
+    return geometry
+
+ZONE_TYPES = ["eez", "contiguous", "territorial", "port_state", "custom"]
 TYPE_PRIORITY = {"port_state": 0, "territorial": 1, "contiguous": 2, "eez": 3, "custom": 4}
 ZONE_LABELS = {"territorial": "Territorial Sea (12 NM)", "contiguous": "Contiguous Zone (24 NM)", "eez": "Exclusive Economic Zone (200 NM)", "port_state": "Port state waters", "custom": "Custom zone"}
+NO_ZONE_NOTE = "No reference maritime zone intersects this geometry: high seas / international waters, or the zone has not been imported. No jurisdiction is inferred."
+DISCLAIMER = "Geographic intersection with a reference boundary is investigation context only — not a legal determination of jurisdiction or responsibility."
+
+
+def provenance_of(z: dict) -> str:
+    if z.get("provenance"):
+        return z["provenance"]
+    src = str(z.get("source", "")).lower()
+    if src.startswith("demo") or "demo" in str(z.get("name", "")).lower():
+        return "DEMO"
+    if src.startswith("uploaded") or src.startswith("drawn"):
+        return "USER-DEFINED"
+    if z.get("official") or "marine regions" in src:
+        return "REFERENCE"
+    return "UNVERIFIED"
+
+
+def zone_public(z: dict) -> dict:
+    return {"id": z.get("id"), "code": z["code"], "name": z["name"], "zone_type": z["zone_type"], "zone_label": ZONE_LABELS.get(z["zone_type"], z["zone_type"]), "country": z.get("country"),
+            "country_code": z.get("country_code") or z.get("country"), "country_name": z.get("country_name"), "authority": z["authority"], "authority_verified": z.get("authority_verified", False),
+            "provenance": provenance_of(z), "authority_status": z.get("authority_status") or provenance_of(z), "source": z.get("source"), "mrgid": z.get("mrgid"), "pol_type": z.get("pol_type")}
 
 
 async def resolve_point_zones(lat: float, lon: float):
     """Zones containing a point (most specific first) — used to tag vessel positions."""
-    zones = await db.jurisdictions.find({"active": True, "geometry": {"$geoIntersects": {"$geometry": {"type": "Point", "coordinates": [lon, lat]}}}}, {"_id": 0, "geometry": 0}).to_list(50)
+    zones = await db.jurisdictions.find({"active": True, "geometry": {"$geoIntersects": {"$geometry": {"type": "Point", "coordinates": [lon, lat]}}}}, {"_id": 0, "geometry": 0, "geometry_low": 0}).to_list(50)
     zones.sort(key=lambda z: TYPE_PRIORITY.get(z["zone_type"], 9))
-    return [{"code": z["code"], "name": z["name"], "zone_type": z["zone_type"], "zone_label": ZONE_LABELS.get(z["zone_type"], z["zone_type"]), "country": z.get("country"), "authority": z["authority"]} for z in zones]
+    return [zone_public(z) for z in zones]
+
+
+async def lookup(geometry: dict) -> dict:
+    """Jurisdiction lookup for any GeoJSON geometry (Point/Polygon/MultiPolygon). Never invents a zone."""
+    if geometry.get("type") == "Point":
+        zones = await resolve_point_zones(geometry["coordinates"][1], geometry["coordinates"][0])
+        primary = zones[0] if zones else None
+    else:
+        poly = validate_polygon(_repair(geometry))
+        geometry = mapping(poly) if geometry.get("type") != "Point" else geometry
+        zones, primary = await resolve_jurisdictions(geometry, {"type": "Point", "coordinates": [poly.centroid.x, poly.centroid.y]})
+    out = {"inside_zone": bool(zones), "zones": zones, "primary": primary, "disclaimer": DISCLAIMER}
+    if primary:
+        out.update({"country": primary.get("country_name") or primary.get("country"), "country_code": primary.get("country_code"), "zone": primary["code"], "zone_name": primary["name"], "zone_type": primary["zone_type"],
+                    "source": primary.get("source"), "authority_status": primary.get("authority_status"), "provenance": primary.get("provenance")})
+    else:
+        out.update({"country": None, "country_code": None, "zone": None, "zone_type": None, "source": None, "authority_status": "NONE", "provenance": None, "note": NO_ZONE_NOTE})
+    return out
 
 DEMO_ZONES = [
     {"code": "GBR-EEZ", "name": "United Kingdom EEZ (demo, simplified)", "authority": "UK Maritime & Coastguard Agency", "country": "GB", "zone_type": "eez",
@@ -48,15 +100,14 @@ async def resolve_jurisdictions(geometry: dict, centroid: dict):
     """Return zones intersecting the spill geometry, primary = highest-priority zone containing the centroid."""
     poly = validate_polygon(geometry)
     cpt = shape(centroid)
-    zones = await db.jurisdictions.find({"active": True, "geometry": {"$geoIntersects": {"$geometry": geometry}}}, {"_id": 0}).to_list(200)
+    zones = await db.jurisdictions.find({"active": True, "geometry": {"$geoIntersects": {"$geometry": geometry}}}, {"_id": 0, "geometry_low": 0}).to_list(200)
     out = []
     for z in zones:
         zg = shape(z["geometry"])
         if not zg.intersects(poly):
             continue
         overlap = zg.intersection(poly).area / poly.area if poly.area else 0.0
-        out.append({"id": z["id"], "code": z["code"], "name": z["name"], "authority": z["authority"], "country": z.get("country"),
-                    "zone_type": z["zone_type"], "zone_label": ZONE_LABELS.get(z["zone_type"], z["zone_type"]), "contains_centroid": zg.contains(cpt), "overlap_fraction": round(overlap, 3)})
+        out.append({**zone_public(z), "contains_centroid": zg.contains(cpt), "overlap_fraction": round(overlap, 3)})
     out.sort(key=lambda j: (not j["contains_centroid"], TYPE_PRIORITY.get(j["zone_type"], 9), -j["overlap_fraction"]))
     primary = out[0] if out and out[0]["contains_centroid"] else (out[0] if out else None)
     return out, primary

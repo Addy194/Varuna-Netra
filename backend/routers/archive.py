@@ -65,6 +65,37 @@ class SpillIn(BaseModel):
     country: Optional[str] = None
 
 
+@router.get("/archive/lessons")
+async def archive_lessons(user=Depends(get_current_user)):
+    """Cross-incident synthesis: what past spills did to the marine environment/economy and which responses worked."""
+    rows = await db.historical_spills.find({}, {"_id": 0}).sort("date", 1).to_list(500)
+    eco, rem = {}, {}
+    for r in rows:
+        for e in r.get("ecosystems") or []:
+            eco.setdefault(e, []).append(r["name"])
+        for m in r.get("remediation") or []:
+            rem.setdefault(m, []).append(r["name"])
+    total_vol = sum(r.get("volume_tonnes") or 0 for r in rows)
+    causes = {}
+    for r in rows:
+        k = (r.get("cause") or "unknown").split(" ")[0].lower()
+        causes[k] = causes.get(k, 0) + 1
+    tactics = [
+        {"phase": "0–2 h · Detect & verify", "actions": ["Confirm SAR dark spot with a second sensor/pass or optical (Sentinel-2/VIIRS) — low wind, algae and upwelling look alike", "Estimate area/thickness (Bonn Agreement appearance code) and drift with wind (3 %) + surface current", "Pull AIS ±6 h in the corridor; rank candidate vessels — never name a 'responsible' vessel without confirmation"]},
+        {"phase": "2–12 h · Contain", "actions": ["Deploy booms at the leading edge and around sensitive intakes/mangrove mouths first", "Mechanical recovery (skimmers) while oil is fresh and thick", "Dispersant only offshore, with NOSDCP/ICG approval, never over reefs or shallow fisheries"]},
+        {"phase": "12–72 h · Protect shoreline", "actions": ["Prioritise shoreline segments by vulnerability (mangroves, turtle nesting, aquaculture, intakes)", "Pre-position sorbents and shoreline crews; close fishing zones with clear public advisories", "Start wildlife triage and sampling for evidence (chain of custody)"]},
+        {"phase": "Days–months · Recover & prosecute", "actions": ["Shoreline Cleanup Assessment Technique (SCAT) surveys and end-point criteria", "Bioremediation for residual oil in sediments; avoid aggressive washing of mangroves", "Evidence package: scene IDs, AIS tracks, drift model, sampling → MARPOL/Merchant Shipping Act claims (CLC/Fund)"]},
+    ]
+    return clean({"incidents": len(rows), "total_volume_tonnes": total_vol, "date_range": [rows[0]["date"], rows[-1]["date"]] if rows else None,
+                  "problems": {"ecosystems_affected": sorted(({"ecosystem": k, "incidents": len(v), "examples": v[:4]} for k, v in eco.items()), key=lambda x: -x["incidents"]),
+                               "causes": sorted(({"cause": k, "incidents": v} for k, v in causes.items()), key=lambda x: -x["incidents"]),
+                               "impacts": ["Fisheries closures and income loss for coastal communities", "Mangrove/coral mortality with decade-scale recovery", "Seabird, turtle and marine-mammal casualties", "Tourism/port disruption and cleanup costs in the hundreds of crores", "Long litigation when the source vessel is not identified early"]},
+                  "solutions": {"remediation_used": sorted(({"method": k, "incidents": len(v), "examples": v[:4]} for k, v in rem.items()), key=lambda x: -x["incidents"]),
+                                "lessons": [{"incident": r["name"], "date": r["date"], "lesson": r["lessons"]} for r in rows if r.get("lessons")],
+                                "response_tactics": tactics},
+                  "note": "Synthesised from the curated historical archive (public incident records); tactics follow NOSDCP/IMO/ITOPF guidance — decision support, not a legal instrument."})
+
+
 @router.get("/archive/{entry_id}/vault")
 async def vault(entry_id: str, user=Depends(get_current_user)):
     from vault import VAULT, reconstruct_frames

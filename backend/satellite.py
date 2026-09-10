@@ -1,7 +1,9 @@
 import asyncio
+import logging
 
 import httpx
 
+logger = logging.getLogger("satellite")
 STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 COLLECTIONS = {
     "sentinel-1-grd": {"label": "Sentinel-1 GRD (SAR, C-band)", "provider": "sentinel-1", "kind": "sar"},
@@ -19,19 +21,27 @@ def _normalize(item: dict) -> dict:
         "cloud_cover": p.get("eo:cloud_cover"), "product_type": p.get("sar:product_type") or p.get("s2:product_type"),
         "footprint": item.get("geometry"), "bbox": item.get("bbox"),
         "preview_href": (a.get("rendered_preview") or {}).get("href"), "thumbnail_href": (a.get("thumbnail") or {}).get("href"),
+        "sar_assets": sorted(k for k in a if k in ("vv", "vh", "hh", "hv")),
         "stac_href": f"{STAC}/collections/{col}/items/{item['id']}",
     }
 
 
-async def search_scenes(bbox: list, start: str, end: str, collection: str = "sentinel-1-grd", limit: int = 25, max_cloud: int | None = None) -> dict:
-    body = {"collections": [collection], "bbox": bbox, "datetime": f"{start}/{end}", "limit": min(limit, 100), "sortby": [{"field": "datetime", "direction": "desc"}]}
+async def search_scenes(bbox: list | None, start: str, end: str, collection: str = "sentinel-1-grd", limit: int = 25, max_cloud: int | None = None, intersects: dict | None = None) -> dict:
+    body = {"collections": [collection], "datetime": f"{start}/{end}", "limit": min(limit, 100), "sortby": [{"field": "datetime", "direction": "desc"}]}
+    if intersects:
+        body["intersects"] = intersects
+    else:
+        body["bbox"] = bbox
     if collection == "sentinel-2-l2a" and max_cloud is not None:
         body["query"] = {"eo:cloud_cover": {"lt": max_cloud}}
+    logger.info("STAC search %s %s %s", collection, "intersects" if intersects else f"bbox={bbox}", body["datetime"])
     async with httpx.AsyncClient(timeout=60) as c:
         r = await c.post(f"{STAC}/search", json=body)
         r.raise_for_status()
         d = r.json()
-    return {"count": len(d.get("features", [])), "matched": (d.get("context") or {}).get("matched"), "scenes": [_normalize(f) for f in d.get("features", [])], "source": "Microsoft Planetary Computer STAC (open, no key)"}
+    feats = d.get("features", [])
+    logger.info("STAC search %s → %d scene(s)", collection, len(feats))
+    return {"count": len(feats), "matched": (d.get("context") or {}).get("matched"), "scenes": [_normalize(f) for f in feats], "source": "Microsoft Planetary Computer STAC (open, no key)"}
 
 
 async def get_item_raw(collection: str, stac_id: str) -> dict:

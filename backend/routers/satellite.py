@@ -1,6 +1,7 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -105,6 +106,28 @@ async def sentinel_latest(user=Depends(get_current_user)):
     if not scene:
         return {"scene": None, "note": "No Sentinel-1 scene registered yet"}
     return clean({"scene": scene, "scene_status": scene_status_summary(scene, {"scene_id": scene["id"]}), "note": "Latest registered Sentinel-1 acquisition (near-real-time archive, not a live feed)."})
+
+
+@router.get("/sentinel/nearest")
+async def sentinel_nearest(lon: float, lat: float, target: str, max_hours: int = Query(168, ge=1, le=720), buffer_deg: float = Query(0.05, gt=0, le=2), user=Depends(get_current_user)):
+    """Nearest real Sentinel-1 GRD acquisition to (lon, lat, target time), adaptive ±36 h → ±7 d. Works for any maritime AOI worldwide."""
+    from sentinel_assets import nearest_scenes, SceneAssetError
+    if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+        raise HTTPException(400, "lon must be within ±180 and lat within ±90 — check for reversed coordinates")
+    try:
+        t = datetime.fromisoformat(target.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "target must be an ISO-8601 timestamp")
+    spill = {"geometry": {"type": "Polygon", "coordinates": [[[lon - buffer_deg, lat - buffer_deg], [lon + buffer_deg, lat - buffer_deg], [lon + buffer_deg, lat + buffer_deg], [lon - buffer_deg, lat + buffer_deg], [lon - buffer_deg, lat - buffer_deg]]]}}
+    try:
+        res = await nearest_scenes(spill, t if t.tzinfo else t.replace(tzinfo=timezone.utc), max_hours)
+    except SceneAssetError as e:
+        raise HTTPException(400, str(e))
+    if res["found"]:
+        best = {k: v for k, v in res["candidates"][0].items() if k != "_item"}
+        return clean({"found": True, "state": res["state"], "scene": best, "time_difference_hours": best["time_difference_hours"], "search_window_hours": res["search_window_hours"], "stages_tried": res["stages_tried"],
+                      "candidates": len(res["candidates"]), "source": "Microsoft Planetary Computer STAC (real archive, not live)"})
+    return clean({"found": False, "state": res["state"], "reason": res["reason"], "stages_tried": res["stages_tried"]})
 
 
 @router.get("/sentinel/search")

@@ -25,8 +25,20 @@ REGIONS = {
     "east_coast": {"name": "Bay of Bengal / East Coast", "bbox": [10.0, 78.5, 22.5, 90.0]},
     "south_india": {"name": "Southern India / Indian Ocean", "bbox": [5.5, 72.0, 10.5, 81.0]},
     "andaman_nicobar": {"name": "Andaman & Nicobar", "bbox": [5.5, 90.0, 15.0, 95.5]},
+    # global monitoring regions (AISStream is worldwide; pick any)
+    "persian_gulf": {"name": "Persian Gulf / Gulf of Oman", "bbox": [22.0, 47.0, 30.5, 60.0], "global": True},
+    "malacca_singapore": {"name": "Malacca Strait / Singapore", "bbox": [-1.0, 98.0, 7.0, 105.0], "global": True},
+    "south_china_sea": {"name": "South China Sea", "bbox": [5.0, 105.0, 23.0, 121.0], "global": True},
+    "red_sea_suez": {"name": "Red Sea / Suez", "bbox": [12.0, 32.0, 31.0, 44.0], "global": True},
+    "mediterranean": {"name": "Mediterranean", "bbox": [30.0, -6.0, 46.0, 36.5], "global": True},
+    "north_sea": {"name": "North Sea / Channel", "bbox": [49.0, -6.0, 62.0, 10.0], "global": True},
+    "gulf_of_mexico": {"name": "Gulf of Mexico", "bbox": [18.0, -98.0, 31.0, -80.0], "global": True},
+    "west_africa": {"name": "Gulf of Guinea / West Africa", "bbox": [-8.0, -20.0, 10.0, 12.0], "global": True},
+    "east_asia": {"name": "East China Sea / Japan / Korea", "bbox": [23.0, 117.0, 42.0, 146.0], "global": True},
+    "us_east_coast": {"name": "US East Coast", "bbox": [24.0, -82.0, 45.0, -60.0], "global": True},
+    "global": {"name": "Global (all AISStream traffic — very high volume)", "bbox": [-90.0, -180.0, 90.0, 180.0], "global": True},
 }
-DEFAULT_REGIONS = list(REGIONS)
+DEFAULT_REGIONS = [k for k, v in REGIONS.items() if not v.get("global")]
 
 state = {"connected": False, "subscription_confirmed": False, "messages": 0, "positions": 0, "inserted": 0, "last_message_at": None, "last_position_at": None,
          "connected_at": None, "last_disconnect_at": None, "error": None, "reconnects": 0, "msg_times": [], "active": {}}

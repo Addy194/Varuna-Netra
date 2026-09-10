@@ -4,6 +4,7 @@ import L from "leaflet";
 import { fmtTime } from "@/lib/api";
 import { GibsLayer } from "@/components/map/GibsLayer";
 import { TILE_PERF, OSM_URL } from "@/components/map/tiles";
+import { LiveVesselLayer } from "@/components/map/LiveVesselLayer";
 
 const FitTo = ({ bounds }) => {
   const map = useMap();
@@ -161,7 +162,7 @@ const ClosestFixes = ({ fixes, bp, selected, colorFor, selectHandler }) => (
   </>
 );
 
-export const CaseMap = ({ geojson, selected, onSelect, showTracks = true, showCorridor = true, timeCursor = null, acquisitionTime = null, zones = null, zoneKinds = null, sideColors = null, gibs = null, overlay = null, fitTo = null, highlight = null, asset = null, darkVessels = null }) => {
+export const CaseMap = ({ geojson, selected, onSelect, showTracks = true, showCorridor = true, timeCursor = null, acquisitionTime = null, zones = null, zoneKinds = null, sideColors = null, gibs = null, overlay = null, fitTo = null, highlight = null, asset = null, darkVessels = null, liveVessels = null }) => {
   const colorFor = useCallback((rank, side) => (sideColors && side ? sideColors[side] : rankColorFor(rank)), [sideColors]);
   const selectHandler = useCallback((mmsi) => ({ click: () => onSelect?.(mmsi) }), [onSelect]);
   const zoneFilter = useCallback((ft) => !zoneKinds || zoneKinds[ft.properties.zone_type] !== false, [zoneKinds]);
@@ -196,6 +197,7 @@ export const CaseMap = ({ geojson, selected, onSelect, showTracks = true, showCo
       )}
       <FitBounds geojson={geojson} />
       <DarkVesselLayer targets={darkVessels} />
+      <LiveVesselLayer vessels={liveVessels} />
       {zones?.features?.length > 0 && (
         <GeoJSON key={`zones-${zones.features.length}-${zoneKinds ? Object.values(zoneKinds).join("") : ""}`} data={zones} filter={zoneFilter} style={zoneStyle} onEachFeature={zoneTooltip} />
       )}

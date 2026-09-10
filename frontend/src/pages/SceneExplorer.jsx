@@ -10,6 +10,9 @@ import { LiveVesselLayer, useLiveVessels } from "@/components/map/LiveVesselLaye
 import { SceneWatches } from "@/components/explorer/SceneWatches";
 import { AssetSearch } from "@/components/map/AssetSearch";
 import { TILE_PERF, OSM_URL } from "@/components/map/tiles";
+import { ZonesLayer } from "@/components/zones/ZonesLayer";
+import { AoiPanel } from "@/components/zones/AoiPanel";
+import { DrawAoi, DrawHint } from "@/components/zones/DrawAoi";
 
 const inputCls = "w-full rounded border bg-slate-900/60 px-2.5 py-1.5 font-mono text-xs text-slate-100 outline-none focus:border-cyan-400/60";
 const bd = { borderColor: "var(--border-highlight)" };
@@ -50,6 +53,10 @@ export default function SceneExplorer() {
   const [maxCloud, setMaxCloud] = useState(40);
   const [view, setView] = useState(null);
   const [flyTo, setFlyTo] = useState(null);
+  const [aoi, setAoi] = useState(null);
+  const [drawing, setDrawing] = useState(false);
+  const [drawn, setDrawn] = useState(null);
+  const [showZones, setShowZones] = useState(true);
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
   const [hover, setHover] = useState(null);
@@ -92,19 +99,24 @@ export default function SceneExplorer() {
   return (
     <div className="flex h-full overflow-hidden" data-testid="explorer-page">
       <div className="relative flex-1">
-        <MapContainer center={[40, 10]} zoom={3} className="h-full w-full" worldCopyJump>
+        <MapContainer center={[40, 10]} zoom={3} className="h-full w-full" worldCopyJump doubleClickZoom={!drawing}>
           <TileLayer url={OSM_URL} attribution="&copy; OpenStreetMap contributors" className="dark-tiles" {...TILE_PERF} />
           {basemap && meta && <GibsLayer layer={meta.basemaps.find((b) => b.id === basemap)} date={gibsDate} template={meta.gibs_template} />}
           {density && <DensityLayer cells={density.cells} />}
           <LiveVesselLayer vessels={liveAis?.vessels} />
           {asset?.geometry && <GeoJSON key={`asset-${asset.id}`} data={asset.geometry} style={{ color: "#FFB703", weight: 2, dashArray: "8,4", fillColor: "#FFB703", fillOpacity: 0.06 }} onEachFeature={(ft, l) => l.bindTooltip(`${asset.name} · ${asset.type}`, { permanent: true, direction: "top" })} />}
           <ViewTracker onView={setView} onZoom={setZoom} /><FlyTo bbox={flyTo} />
+          {showZones && <ZonesLayer types={["eez", "territorial", "contiguous"]} />}
+          {aoi?.geometry && <GeoJSON key={`aoi-${aoi.updated_at}`} data={aoi.geometry} style={{ color: "#00F0FF", weight: 2, dashArray: "10,5", fillOpacity: 0.04 }} onEachFeature={(ft, l) => l.bindTooltip(`AOI · ${aoi.name} (${aoi.provenance})`, { sticky: true })} />}
+          <DrawAoi active={drawing} onDone={(g) => { setDrawn(g); setDrawing(false); }} onCancel={() => setDrawing(false)} />
           {footprints && <GeoJSON key={res.scenes.map((s) => s.stac_id).join("|") + hover} data={footprints}
             style={(ft) => ({ color: ft.properties.id === hover ? "#FFB703" : "#00F0FF", weight: ft.properties.id === hover ? 2.5 : 1, fillOpacity: ft.properties.id === hover ? 0.2 : 0.05 })}
             onEachFeature={(ft, layer) => layer.bindTooltip(ft.properties.id, { sticky: true })} />}
         </MapContainer>
+        <DrawHint active={drawing} />
         <div className="absolute left-3 top-3 z-[1000] flex flex-wrap items-center gap-2">
           <AssetSearch compact onSelect={(h) => { setFlyTo(h.bbox); setAsset(h); }} />
+          <button data-testid="explorer-toggle-zones" onClick={() => setShowZones(!showZones)} className="rounded px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider" style={{ background: "rgba(10,14,23,0.85)", border: "1px solid var(--border-highlight)", color: showZones ? "#38BDF8" : "#94A3B8" }}>EEZ zones</button>
           {PRESETS.map(([l, b]) => <button key={l} data-testid={`preset-${l.replace(/[^a-z]/gi, "").toLowerCase()}`} onClick={() => setFlyTo(b)} className="rounded px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-slate-200" style={{ background: "rgba(10,14,23,0.85)", border: "1px solid var(--border-highlight)", backdropFilter: "blur(12px)" }}><MapPin size={10} className="mr-1 inline" />{l}</button>)}
         </div>
         <div className="absolute bottom-3 left-3 z-[1000] flex gap-2">
@@ -129,8 +141,9 @@ export default function SceneExplorer() {
       </div>
       <aside className="flex w-[480px] shrink-0 flex-col overflow-hidden border-l" style={{ borderColor: "var(--border-default)", background: "var(--bg-secondary)" }}>
         <div className="border-b p-4" style={{ borderColor: "var(--border-default)" }}>
-          <p className="label-mono mb-1">Global scene search · Microsoft Planetary Computer STAC (open)</p>
+          <p className="label-mono mb-1">Global scene search · Microsoft Planetary Computer STAC (open) · latest available acquisitions, not live</p>
           <h1 className="font-display text-2xl font-bold tracking-tight">Scene Explorer</h1>
+          <div className="mt-3"><AoiPanel compact onFlyTo={setFlyTo} onAoiChange={setAoi} drawing={drawing} setDrawing={setDrawing} drawnGeometry={drawn} onDrawnConsumed={() => setDrawn(null)} /></div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <label className="col-span-2 block"><span className="label-mono mb-1 block">Collection</span><select data-testid="explorer-collection-select" className={inputCls} style={bd} value={collection} onChange={(e) => setCollection(e.target.value)}>{meta?.collections.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
             <label className="block"><span className="label-mono mb-1 block">From</span><input data-testid="explorer-start-input" type="date" className={inputCls} style={bd} value={start} onChange={(e) => setStart(e.target.value)} /></label>

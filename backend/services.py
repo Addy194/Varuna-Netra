@@ -1,10 +1,9 @@
 import hashlib
 import logging
-import math
 import random
 from datetime import datetime, timezone, timedelta
 
-from shapely.geometry import shape, mapping
+from shapely.geometry import shape
 
 from db import db, audit, to_utc
 from geo import validate_polygon, area_km2, max_extent_km, rotated_rect_polygon
@@ -30,6 +29,25 @@ async def create_scene(payload: SceneCreate, actor="system"):
     return doc
 
 
+async def raise_threat_alert(kind: str, case: dict, detail: str, actor: str = "system", severity: str = "high") -> dict:
+    """Threat notification: alert record + SSE push + e-mail to on-duty analysts/supervisors/ICG desk (never raises)."""
+    from events import publish
+    from notifications import notify_alert
+    now = datetime.now(timezone.utc)
+    alert = {"id": new_id(), "case_id": case["id"], "case_number": case["case_number"], "severity": severity, "kind": kind, "acknowledged": False, "icg": case.get("icg"),
+             "title": {"new_spill": "New spill detected", "dark_vessel": "Dark-vessel candidate near slick"}.get(kind, kind), "detail": detail, "message": detail, "created_at": now, "created_by": actor}
+    await db.alerts.insert_one(dict(alert))
+    publish("alert", {k: v for k, v in alert.items() if k != "_id"})
+    try:
+        n = await notify_alert(alert, case)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("services").exception("threat alert notification failed")
+        n = {"status": "error", "error": str(e)[:120]}
+        await db.alerts.update_one({"id": alert["id"]}, {"$set": {"notification": {"status": "error", "error": str(e)[:200], "sent": 0, "failed": 0, "at": now}}})
+    await audit("case", case["id"], f"alert.{kind}", {"alert_id": alert["id"], "email": n.get("status")}, actor)
+    return alert
+
+
 async def create_spill_observation(payload: SpillObservationCreate, actor="system"):
     poly = validate_polygon(payload.geometry.model_dump())
     if payload.scene_id and not await db.scenes.find_one({"id": payload.scene_id}):
@@ -48,9 +66,13 @@ async def create_spill_observation(payload: SpillObservationCreate, actor="syste
         "extent_km": round(max_extent_km(poly), 3), "created_at": now, "raw_input": payload.model_dump(mode="json"),
     })
     await db.spill_observations.insert_one(dict(doc))
-    seq = await db.cases.count_documents({}) + 1
+    day = doc["acquisition_time"].strftime("%Y%m%d")
+    ctr = await db.counters.find_one_and_update({"_id": "case_number"}, {"$inc": {"seq": 1}}, upsert=True, return_document=True)
+    seq = ctr["seq"] if ctr["seq"] > 1 else await db.cases.count_documents({}) + 1  # first use: continue from the existing sequence
+    if seq != ctr["seq"]:
+        await db.counters.update_one({"_id": "case_number"}, {"$set": {"seq": seq}})
     case = {
-        "id": case_id, "case_number": f"SPL-{doc['acquisition_time'].strftime('%Y%m%d')}-{seq:03d}",
+        "id": case_id, "case_number": f"SPL-{day}-{seq:03d}",
         "spill_observation_id": spill_id, "scene_id": payload.scene_id, "status": "open",
         "attribution_status": "indeterminate", "automated_status": None, "confidence_band": None, "degraded": None,
         "review_state": "pending", "confirmed_vessel_mmsi": None, "latest_result_version": 0,
@@ -58,7 +80,17 @@ async def create_spill_observation(payload: SpillObservationCreate, actor="syste
         "detection_confidence": payload.detection_confidence, "quality_flags": payload.quality_flags,
         "created_at": now, "updated_at": now,
     }
+    from dashboard import classify_origin, ORIGIN_LABEL
+    case["origin"] = classify_origin(case, doc, actor)
+    case["origin_label"] = ORIGIN_LABEL[case["origin"]]
+    try:
+        from response_eta import nearest_response
+        case["response_eta"] = nearest_response(c.y, c.x)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("services").warning("response ETA failed: %s", e)
     await db.cases.insert_one(dict(case))
+    if payload.source not in ("mock_detector", "demo", "test"):
+        await raise_threat_alert("new_spill", case, f"New spill observation ({payload.source}, confidence {payload.detection_confidence}) — {doc['estimated_area_km2']:.1f} km²", actor)
     try:
         from jurisdiction import resolve_jurisdictions
         zones, primary = await resolve_jurisdictions(doc["geometry"], doc["centroid"])

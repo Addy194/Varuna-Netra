@@ -4,30 +4,75 @@ import { Radar, ScanSearch, Satellite } from "lucide-react";
 import { api, apiError, fmtTime } from "@/lib/api";
 
 const STATE_UI = {
-  SAR_READY: { color: "#10B981", label: "SAR READY", hint: "Real Sentinel-1 SAR attached · dark-vessel scan available" },
+  SAR_READY: { color: "#10B981", label: "SENTINEL-1 SAR READY", hint: "Real Sentinel-1 SAR attached · dark-vessel scan available" },
   QUICKLOOK_GENERATING: { color: "#FFB703", label: "QUICKLOOK GENERATING", hint: "SAR available · preview still being generated" },
-  SAR_UNAVAILABLE: { color: "#FF2A6D", label: "SAR UNAVAILABLE", hint: "No usable Sentinel-1 analysis asset attached" },
+  NO_SCENE_SELECTED: { color: "#94A3B8", label: "NO SCENE SELECTED", hint: "Run the acquisition search to find the nearest real Sentinel-1 pass" },
+  SEARCHING: { color: "#00F0FF", label: "SEARCHING SENTINEL-1", hint: "Querying Planetary Computer STAC (±36 h → ±72 h → ±5 d → ±7 d)" },
+  NO_36H: { color: "#FFB703", label: "NO ACQUISITION IN ±36 H", hint: "" },
+  NEAREST_FOUND_EXTENDED: { color: "#FFB703", label: "NEAREST SENTINEL-1 FOUND (EXTENDED WINDOW)", hint: "" },
+  NO_COVERAGE_7D: { color: "#FF2A6D", label: "NO SENTINEL-1 ACQUISITION FOUND", hint: "Satellite revisit gap for this AOI/time. AIS/jurisdiction investigation can continue." },
+  STAC_FAILED: { color: "#FF2A6D", label: "STAC SEARCH FAILED", hint: "" },
+  SAR_ASSET_UNAVAILABLE: { color: "#FF2A6D", label: "SAR ASSET UNAVAILABLE", hint: "Scene attached but no Sentinel-1 analysis asset" },
+  ATTACH_FAILED: { color: "#FF2A6D", label: "SCENE ATTACHMENT FAILED", hint: "" },
 };
+const fmtDiff = (h) => (h == null ? "—" : `${Math.floor(h)} h ${String(Math.round((h % 1) * 60)).padStart(2, "0")} min`);
 
-const SceneStatus = ({ s, caseId, onAttached }) => {
-  const [busy, setBusy] = useState(false);
+const SceneStatus = ({ s, caseId, acquisitionTime, onAttached }) => {
+  const [busy, setBusy] = useState(null);
+  const [cands, setCands] = useState(null);
+  const [localState, setLocalState] = useState(null);
+  const [skipSar, setSkipSar] = useState(false);
   if (!s) return null;
-  const ui = STATE_UI[s.state] || STATE_UI.SAR_UNAVAILABLE;
-  const attach = async () => {
-    setBusy(true);
-    try { const { data } = await api.post(`/cases/${caseId}/attach-scene`, {}); toast.success(`Attached ${data.scene.provider_scene_id} · ${data.scene_status.state}`); onAttached?.(); }
-    catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  const state = localState || s.state;
+  const ui = STATE_UI[state] || STATE_UI.NO_SCENE_SELECTED;
+  const attach = async (sceneId) => {
+    setBusy(sceneId || "auto"); setLocalState(sceneId ? null : "SEARCHING");
+    try { const { data } = await api.post(`/cases/${caseId}/attach-scene`, sceneId ? { scene_id: sceneId } : {}); toast.success(`Attached ${data.scene.provider_scene_id} · ${fmtDiff(data.attachment.time_difference_hours)} from event`); setLocalState(null); setCands(null); onAttached?.(); }
+    catch (e) { setLocalState(null); onAttached?.(); toast.error(apiError(e)); } finally { setBusy(null); }
   };
+  const view = async () => {
+    setBusy("list"); setLocalState("SEARCHING");
+    try { const { data } = await api.get(`/cases/${caseId}/scene-candidates`); setCands(data); setLocalState(null); onAttached?.(); }
+    catch (e) { setLocalState(null); toast.error(apiError(e)); } finally { setBusy(null); }
+  };
+  const search = s.search;
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[10px]" data-testid="scene-sar-status">
-      <span className="rounded px-1.5 py-0.5 uppercase tracking-wider" style={{ color: ui.color, border: `1px solid ${ui.color}66` }} data-testid="scene-sar-state">{ui.label}</span>
-      <span className="text-slate-400">{s.reason || ui.hint}{s.provider_scene_id ? ` · ${s.provider_scene_id}` : ""}{s.analysis_asset ? ` · analysis asset ${s.analysis_asset}` : ""}{s.quicklook_kind ? ` · quicklook ${s.quicklook_kind}` : ""}</span>
-      {!s.scene_id && <button data-testid="btn-attach-scene" disabled={busy} onClick={attach} className="inline-flex items-center gap-1 rounded border px-2 py-0.5 uppercase tracking-wider text-cyan-300 hover:bg-cyan-400/10 disabled:opacity-50" style={{ borderColor: "rgba(0,240,255,0.4)" }}><Satellite size={10} /> {busy ? "Searching STAC…" : "Find & attach Sentinel-1 scene"}</button>}
+    <div className="mt-2 space-y-1.5 font-mono text-[10px]" data-testid="scene-sar-status">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded px-1.5 py-0.5 uppercase tracking-wider" style={{ color: ui.color, border: `1px solid ${ui.color}66` }} data-testid="scene-sar-state">{ui.label}</span>
+        {s.sar_confirmation === "PENDING" && !skipSar && <span className="rounded px-1.5 py-0.5 uppercase tracking-wider text-amber-300" style={{ border: "1px solid rgba(255,183,3,0.4)" }} data-testid="sar-confirmation-pending">SAR confirmation pending</span>}
+        <span className="text-slate-400" data-testid="scene-sar-reason">{state === "SEARCHING" ? ui.hint : (s.reason || ui.hint)}{s.provider_scene_id ? ` · ${s.provider_scene_id}` : ""}{s.analysis_asset ? ` · asset ${s.analysis_asset}` : ""}</span>
+      </div>
+      {s.scene_id && s.acquisition_time && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-slate-300 md:grid-cols-4" data-testid="scene-acquisition-info">
+          <span>Target event: <b className="text-slate-100">{fmtTime(acquisitionTime)}</b></span><span>Acquired: <b className="text-slate-100">{fmtTime(s.acquisition_time)}</b></span>
+          <span>Difference: <b className="text-slate-100">{fmtDiff(s.time_difference_hours)}</b></span><span>AOI overlap: <b className="text-slate-100">{s.overlap_percent != null ? `${s.overlap_percent}%` : "—"}</b>{s.search_window_hours ? ` · window ±${s.search_window_hours} h` : ""}{s.polarization ? ` · ${s.polarization}` : ""}</span>
+        </div>
+      )}
+      {!s.scene_id && search?.stages_tried?.length > 0 && <div className="text-slate-500" data-testid="scene-search-stages">Search windows tried: {search.stages_tried.map((x) => `±${x.window_hours} h → ${x.scenes}`).join(" · ")}</div>}
+      <div className="flex flex-wrap gap-1.5">
+        {!s.scene_id && <button data-testid="btn-attach-scene" disabled={!!busy} onClick={() => attach()} className="inline-flex items-center gap-1 rounded border px-2 py-0.5 uppercase tracking-wider text-cyan-300 hover:bg-cyan-400/10 disabled:opacity-50" style={{ borderColor: "rgba(0,240,255,0.4)" }}><Satellite size={10} /> {busy === "auto" ? "Searching STAC…" : state === "NO_SCENE_SELECTED" ? "Find nearest Sentinel-1 scene" : "Retry search"}</button>}
+        <button data-testid="btn-view-scenes" disabled={!!busy} onClick={view} className="rounded border px-2 py-0.5 uppercase tracking-wider text-slate-300 hover:text-white disabled:opacity-50" style={{ borderColor: "var(--border-highlight)" }}>{busy === "list" ? "Searching…" : s.scene_id ? "Change scene" : "View available scenes"}</button>
+        {!s.scene_id && !skipSar && <button data-testid="btn-continue-without-sar" onClick={() => setSkipSar(true)} className="rounded border px-2 py-0.5 uppercase tracking-wider text-slate-400 hover:text-white" style={{ borderColor: "var(--border-default)" }}>Continue without SAR</button>}
+        {skipSar && <span className="text-amber-300" data-testid="without-sar-note">Continuing with AIS + jurisdiction only · SAR confirmation pending · re-check satellite later</span>}
+      </div>
+      {cands && (
+        <div className="rounded border p-2" style={{ borderColor: "var(--border-highlight)" }} data-testid="scene-candidates">
+          <div className="mb-1 flex flex-wrap items-center gap-2 text-slate-300"><b className="text-slate-100">AVAILABLE SENTINEL-1 SCENES</b> · PRIMARY: Sentinel-1 SAR · {cands.found ? `${cands.candidates.length} in ±${cands.search_window_hours} h` : cands.reason}</div>
+          {cands.candidates.map((c) => (
+            <div key={c.scene_id} className="flex flex-wrap items-center gap-2 border-t py-1" style={{ borderColor: "var(--border-default)" }} data-testid={`scene-candidate-${c.scene_id}`}>
+              <span className="text-cyan-300">{c.scene_id}</span><span className="text-slate-400">{fmtTime(c.acquisition_time)}</span><span>{c.signed_offset_hours > 0 ? "+" : "−"}{fmtDiff(c.time_difference_hours)}</span>
+              <span>overlap {c.overlap_percent != null ? `${c.overlap_percent}%` : "—"}</span><span>{(c.polarization || []).join("+") || "—"}</span><span className="text-slate-500">{c.platform} · score {c.score}</span>
+              {c.scene_id === s.provider_scene_id ? <span className="ml-auto text-emerald-300">attached</span> : <button data-testid={`btn-use-scene-${c.scene_id}`} disabled={!!busy} onClick={() => attach(c.scene_id)} className="ml-auto rounded bg-cyan-400 px-1.5 py-0.5 font-semibold uppercase text-slate-950 disabled:opacity-50">{busy === c.scene_id ? "…" : "Use scene"}</button>}
+            </div>))}
+          {cands.supplementary && <div className="mt-1 text-slate-500" data-testid="scene-supplementary">SUPPLEMENTARY: {cands.supplementary.role} · {cands.supplementary.error || `${cands.supplementary.count} Sentinel-2 scene(s) within ±72 h`}{cands.supplementary.scenes?.slice(0, 2).map((x) => ` · ${x.stac_id} (cloud ${x.cloud_cover ?? "?"}%)`)}</div>}
+        </div>
+      )}
     </div>
   );
 };
 
-export const DarkVessels = ({ caseId, onScan, sceneStatus, onAttached }) => {
+export const DarkVessels = ({ caseId, onScan, sceneStatus, acquisitionTime, onAttached }) => {
   const [scan, setScan] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -37,7 +82,7 @@ export const DarkVessels = ({ caseId, onScan, sceneStatus, onAttached }) => {
   const run = async () => {
     setBusy(true); setError(null);
     try { const { data } = await api.post(`/cases/${caseId}/dark-vessels/scan`, null, { params: { radius_km: radius } }); setScan(data); onScan?.(data); toast.success(`${data.dark_count} dark-vessel candidate(s) among ${data.targets.length} bright targets`); onAttached?.(); }
-    catch (e) { setError(apiError(e)); toast.error(apiError(e)); } finally { setBusy(false); }
+    catch (e) { setError(apiError(e)); onAttached?.(); } finally { setBusy(false); }
   };
   const dark = scan?.targets?.filter((t) => t.dark_candidate) || [];
   const noAis = scan?.ais_fixes_checked === 0;
@@ -51,7 +96,7 @@ export const DarkVessels = ({ caseId, onScan, sceneStatus, onAttached }) => {
           <button data-testid="btn-dark-scan" disabled={busy} onClick={run} className="inline-flex items-center gap-1 rounded bg-rose-500 px-2.5 py-1 font-semibold uppercase tracking-wider text-slate-950 disabled:opacity-50"><ScanSearch size={11} /> {busy ? "Scanning…" : "Scan SAR for ships"}</button>
         </span>
       </div>
-      <SceneStatus s={sceneStatus} caseId={caseId} onAttached={onAttached} />
+      <SceneStatus s={sceneStatus} caseId={caseId} acquisitionTime={acquisitionTime} onAttached={onAttached} />
       {error && <p className="mt-2 text-[11px] text-rose-300" data-testid="dark-scan-error">{error}</p>}
       {scan?.status === "not_scanned" && !error && <p className="mt-2 text-[11px] text-slate-500" data-testid="dark-not-scanned">Not scanned yet. {sceneStatus?.state === "SAR_READY" ? "Real SAR asset ready — run the scan." : "Attach a Sentinel-1 scene with a SAR asset first."}</p>}
       {scan?.targets && scan.status !== "not_scanned" && (

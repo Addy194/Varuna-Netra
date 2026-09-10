@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,7 +6,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from auth import get_current_user, require_role
-from db import db, clean, audit
+from db import db, clean, audit, to_utc
 from geo import circle_polygon
 from models import CorrelateRequest, ReviewCreate, OverrideRequest, REASON_CODES, new_id
 from jobs import enqueue, process
@@ -32,12 +32,24 @@ async def _result(case_id, version: Optional[int]):
 
 
 @router.get("/cases")
-async def list_cases(status: Optional[str] = None, attribution_status: Optional[str] = None, limit: int = Query(200, le=1000), user=Depends(get_current_user)):
-    q = {}
+async def list_cases(status: Optional[str] = None, attribution_status: Optional[str] = None, review_state: Optional[str] = None, origin: str = "real", include_demo: bool = False,
+                     limit: int = Query(200, le=1000), user=Depends(get_current_user)):
+    """origin: real (default — detector/analyst cases on real scenes) | imported | demo | all."""
+    from dashboard import REAL_CASE_FILTER, REAL_ORIGINS
+    if include_demo or origin == "all":
+        q = {}
+    elif origin == "real":
+        q = dict(REAL_CASE_FILTER)
+    elif origin in ("imported", "demo", "reference", "detector", "analyst"):
+        q = {"origin": origin}
+    else:
+        raise HTTPException(400, f"origin must be one of real, imported, demo, all (real = {REAL_ORIGINS})")
     if status:
         q["status"] = status
     if attribution_status:
-        q["attribution_status"] = attribution_status
+        q["attribution_status"] = {"$in": attribution_status.split(",")}
+    if review_state:
+        q["review_state"] = review_state
     return clean(await db.cases.find(q, {"_id": 0}).sort("acquisition_time", -1).to_list(limit))
 
 
@@ -51,27 +63,91 @@ async def get_case(case_id: str, user=Depends(get_current_user)):
     return clean({**case, "spill_observation": spill, "scene": scene, "scene_status": scene_status_summary(scene, case), "result_versions": versions})
 
 
+@router.get("/cases/{case_id}/response-eta")
+async def response_eta(case_id: str, user=Depends(get_current_user)):
+    from response_eta import nearest_response
+    case = await _case(case_id)
+    lon, lat = case["centroid"]["coordinates"]
+    out = nearest_response(lat, lon)
+    await db.cases.update_one({"id": case_id}, {"$set": {"response_eta": out}})
+    return clean({"case_id": case_id, "spill": {"lat": lat, "lon": lon}, **out})
+
+
+@router.get("/cases/{case_id}/scene-timeline")
+async def scene_timeline(case_id: str, days: int = Query(60, ge=1, le=365), user=Depends(get_current_user)):
+    """Every real Sentinel-1 GRD pass over the spill centroid within ±days (Planetary Computer STAC) — for scrubbing slick evolution."""
+    from satellite import search_scenes
+    case = await _case(case_id)
+    lon, lat = case["centroid"]["coordinates"]
+    t = to_utc(case["acquisition_time"])
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    try:
+        res = await search_scenes([lon - 0.02, lat - 0.02, lon + 0.02, lat + 0.02], (t - timedelta(days=days)).strftime(fmt), (t + timedelta(days=days)).strftime(fmt), "sentinel-1-grd", 100)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"STAC search failed: {str(e)[:160]}")
+    reg = {s["provider_scene_id"]: s["id"] for s in await db.scenes.find({"provider_scene_id": {"$in": [x["stac_id"] for x in res["scenes"]]}}, {"_id": 0, "id": 1, "provider_scene_id": 1}).to_list(200)}
+    passes = sorted(res["scenes"], key=lambda s: s["datetime"])
+    for p in passes:
+        dt = datetime.fromisoformat(p["datetime"].replace("Z", "+00:00"))
+        p.update({"offset_hours": round((dt - t).total_seconds() / 3600, 1), "is_case_scene": reg.get(p["stac_id"]) == case.get("scene_id"), "registered_scene_id": reg.get(p["stac_id"]),
+                  "preview": f"/satellite/preview?collection={p['collection']}&stac_id={p['stac_id']}" if p.get("preview_href") or p.get("thumbnail_href") else None})
+    return clean({"case_id": case_id, "case_number": case["case_number"], "acquisition_time": t, "window_days": days, "count": len(passes), "passes": passes,
+                  "source": "Microsoft Planetary Computer STAC — real archive acquisitions (near-real-time, not live)"})
+
+
 class AttachScene(BaseModel):
     scene_id: Optional[str] = None
 
 
 @router.post("/cases/{case_id}/attach-scene")
 async def attach_case_scene(case_id: str, body: AttachScene = AttachScene(), user=Depends(require_role("analyst"))):
-    """Attach a registered Sentinel scene (by internal id or STAC id) or auto-find the real Sentinel-1 scene covering the spill."""
-    from sentinel_assets import attach_scene, auto_attach_scene, resolve_scene_assets, SceneAssetError
+    """Attach a Sentinel scene by internal id / STAC id (registering it from STAC if needed) or auto-attach the best-ranked real Sentinel-1 scene (adaptive ±36 h→±7 d)."""
+    from sentinel_assets import attach_scene, auto_attach_scene, resolve_scene_assets, register_stac_item, SceneAssetError
+    from satellite import get_item
     case = await _case(case_id)
     try:
         if body.scene_id:
             scene = await db.scenes.find_one({"$or": [{"id": body.scene_id}, {"provider_scene_id": body.scene_id}]}, {"_id": 0})
+            if not scene and body.scene_id.startswith("S1"):
+                try:
+                    scene = await register_stac_item(await get_item("sentinel-1-grd", body.scene_id), user["email"])
+                except Exception as e:  # noqa: BLE001
+                    raise HTTPException(409, f"ATTACH_FAILED: scene {body.scene_id} not found in STAC ({str(e)[:100]})")
             if not scene:
                 raise HTTPException(404, "scene not found")
-            await attach_scene(case, scene, user["email"])
+            await attach_scene(case, scene, user["email"], window_h=(case.get("scene_search") or {}).get("search_window_hours"))
         else:
             scene = await auto_attach_scene(case, user["email"])
         status = await resolve_scene_assets(scene)
     except SceneAssetError as e:
         raise HTTPException(409, str(e))
-    return clean({"case_id": case_id, "scene": scene, "scene_status": status})
+    fresh = await _case(case_id)
+    return clean({"case_id": case_id, "scene": scene, "scene_status": {**status, **{k: fresh["scene_attachment"].get(k) for k in ("time_difference_hours", "overlap_percent", "search_window_hours", "auto")}}, "attachment": fresh["scene_attachment"]})
+
+
+@router.get("/cases/{case_id}/scene-candidates")
+async def scene_candidates(case_id: str, max_hours: int = Query(168, ge=1, le=720), user=Depends(get_current_user)):
+    """AVAILABLE SENTINEL-1 SCENES for this spill: adaptive staged search, ranked; supplementary Sentinel-2 optical context listed separately (never a SAR substitute)."""
+    from sentinel_assets import nearest_scenes, _remember_search, SceneAssetError
+    from satellite import search_scenes
+    case = await _case(case_id)
+    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "geometry": 1, "acquisition_time": 1})
+    t = to_utc(spill["acquisition_time"])
+    try:
+        res = await nearest_scenes(spill, t, max_hours)
+    except SceneAssetError as e:
+        raise HTTPException(400, str(e))
+    await _remember_search(case_id, res)
+    s2 = None
+    try:
+        r2 = await search_scenes(None, (t - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ"), (t + timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ"), "sentinel-2-l2a", 5, intersects=res["aoi"])
+        s2 = {"role": "SUPPLEMENTARY — Sentinel-2 optical (not a SAR substitute)", "count": r2["count"], "scenes": [{k: x.get(k) for k in ("stac_id", "datetime", "cloud_cover", "platform")} for x in r2["scenes"]]}
+    except Exception as e:  # noqa: BLE001
+        s2 = {"role": "SUPPLEMENTARY — Sentinel-2 optical", "error": f"search failed: {str(e)[:100]}"}
+    cands = [{k: v for k, v in c.items() if k != "_item"} for c in res.get("candidates", [])]
+    return clean({"case_id": case_id, "target_time": t, "primary": "Sentinel-1 SAR (sentinel-1-grd)", "found": res["found"], "state": res["state"], "reason": res.get("reason"), "search_window_hours": res.get("search_window_hours"),
+                  "stages_tried": res["stages_tried"], "candidates": cands, "attached_scene_id": case.get("scene_id"), "attachment": case.get("scene_attachment"), "supplementary": s2,
+                  "source": "Microsoft Planetary Computer STAC — real archive acquisitions (latest available, not live)"})
 
 
 @router.post("/cases/{case_id}/correlate", status_code=202)

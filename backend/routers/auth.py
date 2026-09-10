@@ -194,3 +194,18 @@ async def test_email_settings(user=Depends(require_role("admin"))):
     if not res["sent"]:
         raise HTTPException(400, res.get("error", "send failed"))
     return {"ok": True, "to": user["email"], "id": res.get("id")}
+
+
+
+@router.post("/email/test")
+async def email_test(to: Optional[str] = None, user=Depends(require_role("admin"))):
+    """Send a test e-mail via Resend (RESEND_API_KEY from backend env). Clear JSON on success/failure; never raises, never returns the key."""
+    cfg = await get_email_config()
+    target = to or user["email"]
+    if not cfg["api_key"]:
+        return {"ok": False, "configured": False, "error": "RESEND_API_KEY not configured in the backend environment", "sender": cfg["sender_email"], "to": target}
+    res = await send_email(target, "Varuna Netra — Resend delivery test", test_email_html(user.get("name") or target))
+    await record_test(res, target)
+    await audit("settings", "email", "settings.email_tested", {**res, "to": target}, user["email"])
+    return {"ok": res["sent"], "configured": True, "sender": cfg["sender_email"], "to": target, "id": res.get("id"), "error": res.get("error"),
+            "note": None if res["sent"] else "With onboarding@resend.dev Resend only delivers to the account owner's e-mail; verify a domain to send to others."}

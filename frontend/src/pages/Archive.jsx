@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { BookOpen, Plus } from "lucide-react";
 import { api, apiError, fmtTime, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { ArchiveLessons } from "@/components/archive/ArchiveLessons";
 
 const inputCls = "w-full rounded border bg-slate-900/60 px-2.5 py-1.5 font-mono text-xs text-slate-100 outline-none focus:border-cyan-400/60";
 const bd = { borderColor: "var(--border-highlight)" };
@@ -31,6 +32,7 @@ export default function Archive() {
         <input data-testid="archive-search" className={`${inputCls} w-80`} style={bd} value={q} onChange={(e) => { const n = new URLSearchParams(sp); e.target.value ? n.set("q", e.target.value) : n.delete("q"); setSp(n); }} placeholder="search name, country, oil type, cause, ecosystem…" />
         {hasRole(user, "supervisor") && <button data-testid="btn-archive-add" onClick={() => setShowForm(!showForm)} className="inline-flex items-center gap-1.5 rounded bg-cyan-400 px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-950"><Plus size={12} /> Add incident</button>}
       </div>
+      <ArchiveLessons />
       {showForm && (
         <div className="panel mb-4 grid grid-cols-4 gap-2 p-4" data-testid="archive-form">
           {[["name", "name"], ["date", "date YYYY-MM-DD"], ["country", "country"], ["oil_type", "oil type"], ["lat", "lat"], ["lon", "lon"], ["volume_tonnes", "volume tonnes"], ["vessel_facility", "vessel / facility"]].map(([k, ph]) => <input key={k} data-testid={`archive-${k}`} className={inputCls} style={bd} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={ph} />)}

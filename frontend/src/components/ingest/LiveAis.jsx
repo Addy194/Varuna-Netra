@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 
 const bd = { borderColor: "var(--border-highlight)" };
 const REGION_LABELS = { west_coast: "West Coast", east_coast: "East Coast", south_india: "South India", andaman_nicobar: "Andaman & Nicobar", default: "All India (default)" };
+const GLOBAL_REGIONS = { persian_gulf: "Persian Gulf", malacca_singapore: "Malacca / Singapore", south_china_sea: "South China Sea", red_sea_suez: "Red Sea / Suez", mediterranean: "Mediterranean", north_sea: "North Sea", gulf_of_mexico: "Gulf of Mexico", west_africa: "West Africa", east_asia: "East Asia", us_east_coast: "US East Coast", global: "Global (all)" };
 
 export const LiveAis = ({ onChanged }) => {
   const { user } = useAuth();
@@ -39,6 +40,9 @@ export const LiveAis = ({ onChanged }) => {
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <span className="label-mono mr-1">Monitor region</span>
           {Object.entries(REGION_LABELS).map(([k, l]) => <button key={k} data-testid={`live-ais-region-${k}`} disabled={busy} onClick={() => setRegion(k)} className="rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-slate-300 hover:text-white disabled:opacity-50" style={bd}>{l}</button>)}
+          <select data-testid="live-ais-region-global" disabled={busy} defaultValue="" onChange={(e) => { if (e.target.value) setRegion(e.target.value); e.target.value = ""; }} className="rounded border bg-slate-900/60 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-slate-300" style={bd}>
+            <option value="">🌐 World region…</option>{Object.entries(GLOBAL_REGIONS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
           {hasRole(user, "admin") && <button data-testid="btn-test-ais" disabled={busy} onClick={test} className="ml-auto rounded bg-cyan-400 px-3 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-950 disabled:opacity-50">Test connection</button>}
         </div>
       )}

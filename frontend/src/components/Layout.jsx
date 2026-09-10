@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Radar, LayoutDashboard, Satellite, Activity, ShieldAlert, Users as UsersIcon, LogOut, Map as MapIcon, Eye, Columns2, Globe2, Images, BookOpen, HeartPulse } from "lucide-react";
+import { Radar, LayoutDashboard, Satellite, ShieldAlert, Users as UsersIcon, LogOut, Map as MapIcon, Eye, Columns2, Globe2, Images, BookOpen, HeartPulse } from "lucide-react";
 import { api, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { LiveBell, CriticalBanner } from "@/components/LiveBell";
@@ -12,7 +12,7 @@ const links = [
   { to: "/events", label: "Events", icon: Images, id: "nav-events-link" },
   { to: "/archive", label: "Archive", icon: BookOpen, id: "nav-archive-link" },
   { to: "/health", label: "Data Sources", icon: HeartPulse, id: "nav-health-link" },
-  { to: "/jobs", label: "Jobs & Alerts", icon: Activity, id: "nav-jobs-link" },
+  { to: "/alerts", label: "Alerts", icon: ShieldAlert, id: "nav-alerts-link" },
   { to: "/zones", label: "Zones", icon: MapIcon, id: "nav-zones-link" },
   { to: "/watchlist", label: "Watchlist", icon: Eye, id: "nav-watchlist-link" },
   { to: "/compare", label: "Compare", icon: Columns2, id: "nav-compare-link" },
@@ -24,12 +24,15 @@ export const Layout = () => {
   const nav = useNavigate();
   const [clock, setClock] = useState(new Date());
   const [stats, setStats] = useState(null);
+  const [statsErr, setStatsErr] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setClock(new Date()), 1000);
-    const load = () => api.get("/stats").then((r) => setStats(r.data)).catch(() => {});
+    const load = () => api.get("/dashboard/summary").then((r) => { setStats(r.data); setStatsErr(false); }).catch(() => setStatsErr(true));
     load();
     const s = setInterval(load, 15000);
-    return () => { clearInterval(t); clearInterval(s); };
+    const onEvt = () => load();
+    window.addEventListener("varuna:refresh-counters", onEvt);
+    return () => { clearInterval(t); clearInterval(s); window.removeEventListener("varuna:refresh-counters", onEvt); };
   }, []);
 
   return (
@@ -55,12 +58,18 @@ export const Layout = () => {
           )}
         </nav>
         <div className="ml-auto flex items-center gap-6">
-          {stats && (
-            <div className="hidden items-center gap-5 md:flex">
-              <Stat label="Cases" value={stats.cases_total} testId="nav-stat-cases" />
-              <Stat label="Pending" value={stats.pending_review} color="#FFB703" testId="nav-stat-pending" />
-              <Stat label="Alerts" value={stats.alerts_unacknowledged} color="#FF2A6D" icon={<ShieldAlert size={12} />} testId="nav-stat-alerts" />
-              <Stat label="Jobs" value={stats.jobs_running} color="#00F0FF" testId="nav-stat-jobs" />
+          {(stats || statsErr) && (
+            <div className="hidden items-center gap-5 md:flex" title="Real database counts (demo/mock records excluded)">
+              <Stat label="Cases" value={statsErr ? "Unavailable" : stats.live_cases} testId="nav-stat-cases" onClick={() => nav("/?origin=real")} />
+              <Stat label="Pending" value={statsErr ? "Unavailable" : stats.pending_review} color="#FFB703" testId="nav-stat-pending" onClick={() => nav("/?origin=real&view=pending")} />
+              <Stat label="Alerts" value={statsErr ? "Unavailable" : stats.alerts.unread} color="#FF2A6D" icon={<ShieldAlert size={12} />} testId="nav-stat-alerts" onClick={() => nav("/alerts?alerts=unread")} />
+              {stats?.demo?.imported > 0 && <Stat label="Imported" value={stats.demo.imported} color="#FFB703" testId="nav-stat-imported" onClick={() => nav("/?origin=imported")} />}
+              {stats?.demo?.cases > 0 && <Stat label="Demo" value={stats.demo.cases} color="#94A3B8" testId="nav-stat-demo" onClick={() => nav("/?origin=demo")} />}
+            </div>
+          )}
+          {!stats && !statsErr && (
+            <div className="hidden items-center gap-5 md:flex" data-testid="nav-stats-loading">
+              <Stat label="Cases" value="—" /><Stat label="Pending" value="—" color="#FFB703" /><Stat label="Alerts" value="—" color="#FF2A6D" />
             </div>
           )}
           <div className="flex items-center gap-2 font-mono text-xs text-slate-300" data-testid="utc-clock">
@@ -87,9 +96,9 @@ export const Layout = () => {
   );
 };
 
-const Stat = ({ label, value, color = "#F8FAFC", icon, testId }) => (
-  <div className="flex items-baseline gap-1.5" data-testid={testId}>
+const Stat = ({ label, value, color = "#F8FAFC", icon, testId, onClick }) => (
+  <button type="button" onClick={onClick} className={`flex items-baseline gap-1.5 ${onClick ? "cursor-pointer hover:opacity-80" : "cursor-default"}`} data-testid={testId}>
     <span className="label-mono">{label}</span>
     <span className="font-mono text-sm font-semibold flex items-center gap-1" style={{ color }}>{icon}{value}</span>
-  </div>
+  </button>
 );

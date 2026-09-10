@@ -50,12 +50,11 @@ async def seed_gazetteer():
 
 async def _entries():
     rows = await db.gazetteer.find({}, {"_id": 0}).to_list(5000)
-    for z in await db.jurisdictions.find({"active": True}, {"_id": 0, "code": 1, "name": 1, "authority": 1, "bbox": 1, "geometry": 1, "official": 1}).to_list(200):
+    for z in await db.jurisdictions.find({"active": True}, {"_id": 0, "code": 1, "name": 1, "authority": 1, "bbox": 1, "provenance": 1, "official": 1}).to_list(2000):
         bb = z.get("bbox")
         if not bb:
-            from shapely.geometry import shape
-            bb = list(shape(z["geometry"]).bounds)
-        rows.append({"id": f"zone:{z['code']}", "name": f"{z['name']} ({z['code']})", "type": "eez", "country": z.get("authority"), "operator": None, "bbox": bb, "center": [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2], "geometry": None, "zone_code": z["code"], "source": "official" if z.get("official") else "zones"})
+            continue
+        rows.append({"id": f"zone:{z['code']}", "name": f"{z['name']} ({z['code']})", "type": "eez", "country": z.get("authority"), "operator": None, "bbox": bb, "center": [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2], "geometry": None, "zone_code": z["code"], "source": (z.get("provenance") or ("reference" if z.get("official") else "zones")).lower()})
     return rows
 
 

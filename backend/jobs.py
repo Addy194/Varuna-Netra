@@ -80,3 +80,18 @@ def start() -> None:
     global _queue
     _queue = asyncio.Queue()
     asyncio.create_task(worker())
+    asyncio.create_task(_recover_orphans())
+
+
+async def _recover_orphans() -> None:
+    """Queue lives in memory: jobs left queued/running by a previous process would otherwise stay stuck forever."""
+    orphans = await db.jobs.find({"status": {"$in": ["queued", "running"]}}, {"_id": 0, "id": 1, "attempts": 1}).sort("created_at", 1).to_list(2000)
+    for j in orphans:
+        if j.get("attempts", 0) >= MAX_ATTEMPTS:
+            await db.jobs.update_one({"id": j["id"]}, {"$set": {"status": "failed", "error": "abandoned: max attempts reached before process restart", "finished_at": datetime.now(timezone.utc)}})
+            continue
+        await db.jobs.update_one({"id": j["id"]}, {"$set": {"status": "queued"}})
+        await job_log(j["id"], "re-queued after backend restart (in-memory queue lost)")
+        await _queue.put(j["id"])
+    if orphans:
+        logger.info("jobs: recovered %d orphaned jobs", len(orphans))

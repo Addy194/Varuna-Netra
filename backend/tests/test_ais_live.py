@@ -31,10 +31,13 @@ def test_bbox_format_not_swapped():
     assert -90 <= lat0 < lat1 <= 90 and 60 < lon0 < lon1 < 100  # lat first, Indian longitudes
 
 
-def test_regions_in_indian_waters():
-    for r in ais_live.REGIONS.values():
-        s, w, n, e = r["bbox"]
+def test_default_regions_in_indian_waters():
+    for k in ais_live.DEFAULT_REGIONS:
+        s, w, n, e = ais_live.REGIONS[k]["bbox"]
         assert 5 <= s < n <= 25 and 65 <= w < e <= 96
+    for k, r in ais_live.REGIONS.items():
+        ais_live.validate_bbox(*r["bbox"])
+        assert r.get("global") or k in ais_live.DEFAULT_REGIONS
 
 
 def test_validate_bbox_rejects_bad():

@@ -38,10 +38,10 @@ def test_no_sar_asset_detected():
 def test_case_summary_states():
     case = {"scene_id": None}
     s = sa.scene_status_summary(None, case)
-    assert s["state"] == "SAR_UNAVAILABLE" and "No Sentinel scene" in s["reason"]
+    assert s["state"] == "NO_SCENE_SELECTED" and "No Sentinel-1 scene" in s["reason"]
     manual = {"id": "m", "provider_scene_id": "MANUAL", "acquisition_time": "2026-01-01T00:00:00Z", "metadata": {}}
     s = sa.scene_status_summary(manual, {"scene_id": "m"})
-    assert s["state"] == "SAR_UNAVAILABLE" and s["sar_available"] is False and "SAR asset missing" in s["reason"]
+    assert s["state"] == "SAR_ASSET_UNAVAILABLE" and s["sar_available"] is False and "SAR asset missing" in s["reason"]
     stac_no_thumb = {"id": "r", "provider_scene_id": "S1Y", "acquisition_time": "2026-01-01T00:00:00Z", "metadata": {"stac_collection": "sentinel-1-grd"}, "assets": sa.summarize_assets(ITEM_NO_THUMB)}
     s = sa.scene_status_summary(stac_no_thumb, {"scene_id": "r"})
     assert s["state"] == "SAR_READY" and s["quicklook_available"] is False and s["analysis_asset"] == "hh"

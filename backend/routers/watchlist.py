@@ -21,7 +21,7 @@ class ImportRequest(BaseModel):
 
 @router.post("/jurisdictions/import/marine-regions", status_code=202)
 async def import_marine_regions(body: ImportRequest, user=Depends(require_role("admin"))):
-    bad = [i for i in body.iso3 if len(i.strip()) != 3]
+    bad = [i for i in body.iso3 if len(i.strip()) != 3 and i.strip().upper() not in ("ALL", "GLOBAL")]
     if bad or not body.iso3:
         raise HTTPException(400, "iso3 must be a non-empty list of 3-letter ISO codes")
     if any(l not in ("eez", "eez_24nm", "eez_12nm") for l in body.layers) or not body.layers:

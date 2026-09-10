@@ -21,10 +21,13 @@ import { Precedents } from "@/components/case/Precedents";
 import { Vulnerability } from "@/components/case/Vulnerability";
 import { DarkVessels } from "@/components/case/DarkVessels";
 import { Provenance } from "@/components/case/Provenance";
+import { SceneTimeline } from "@/components/case/SceneTimeline";
+import { ResponseEta } from "@/components/case/ResponseEta";
+import { useLiveVessels } from "@/components/map/LiveVesselLayer";
 import { AssetSearch, assetBounds } from "@/components/map/AssetSearch";
 import { useLive } from "@/context/LiveFeed";
 
-const TABS = [["candidates", "Candidates"], ["review", "Analyst review"], ["response", "Response"], ["vulnerability", "Vulnerability"], ["timeline", "Timeline"], ["files", "Files"], ["beforeafter", "Before / After"], ["evidence", "Evidence & audit"], ["log", "Processing log"]];
+const TABS = [["candidates", "Candidates"], ["review", "Analyst review"], ["response", "Response"], ["vulnerability", "Vulnerability"], ["timeline", "Timeline"], ["files", "Files"], ["beforeafter", "Before / After"], ["scenes", "Scene timeline"], ["evidence", "Evidence & audit"], ["log", "Processing log"]];
 const overlayBtn = { background: "rgba(10,14,23,0.85)", border: "1px solid var(--border-highlight)", backdropFilter: "blur(12px)" };
 
 export default function CaseDetail() {
@@ -43,6 +46,13 @@ export default function CaseDetail() {
   const [pdfBusy, setPdfBusy] = useState(false);
   const [zones, setZones] = useState(null);
   const [showZones, setShowZones] = useState(true);
+  const { data: liveAis } = useLiveVessels(15000);
+  const nearLive = useMemo(() => {
+    if (!c?.centroid || !liveAis?.vessels) return [];
+    const [lon0, lat0] = c.centroid.coordinates;
+    const km = (a, b) => { const R = 6371, dLat = (b[0] - a[0]) * Math.PI / 180, dLon = (b[1] - a[1]) * Math.PI / 180, x = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLon / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
+    return liveAis.vessels.map((v) => ({ ...v, distance_km: km([lat0, lon0], [v.lat, v.lon]) })).filter((v) => v.distance_km <= 250).sort((a, b) => a.distance_km - b.distance_km);
+  }, [c?.centroid, liveAis]);
   const [zoneKinds, setZoneKinds] = useState({ territorial: true, contiguous: true, eez: true, port_state: true, custom: true });
   const [satMeta, setSatMeta] = useState(null);
   const [showSat, setShowSat] = useState(false);
@@ -66,7 +76,9 @@ export default function CaseDetail() {
   };
 
   const load = useCallback(async () => {
-    const [a, b, g, e, cfg, z] = await Promise.all([api.get(`/cases/${id}`), api.get(`/cases/${id}/candidates`), api.get(`/cases/${id}/geojson`), api.get(`/cases/${id}/evidence`), api.get("/config/defaults"), api.get("/jurisdictions/geojson")]);
+    const [a, b, g, e, cfg] = await Promise.all([api.get(`/cases/${id}`), api.get(`/cases/${id}/candidates`), api.get(`/cases/${id}/geojson`), api.get(`/cases/${id}/evidence`), api.get("/config/defaults")]);
+    const [lon, lat] = a.data.centroid.coordinates;
+    const z = await api.get(`/jurisdictions/geojson?bbox=${lon - 4},${lat - 4},${lon + 4},${lat + 4}&detail=low`).catch(() => ({ data: null }));
     setC(a.data); setCands(b.data); setGeo(g.data); setEvidence(e.data); setConfig(cfg.data); setZones(z.data);
   }, [id]);
   useEffect(() => { load().catch((e) => toast.error(apiError(e))); }, [load]);
@@ -117,7 +129,7 @@ export default function CaseDetail() {
   return (
     <div className="flex h-full overflow-hidden" data-testid="case-detail">
       <div className="relative flex-1">
-        <CaseMap darkVessels={darkScan?.targets} geojson={geo} selected={selected} onSelect={setSelected} showTracks={showTracks} timeCursor={cursor} acquisitionTime={c.acquisition_time} zones={showZones ? zones : null} zoneKinds={zoneKinds} gibs={showSat && satMeta ? { layer: satMeta.basemaps[0], template: satMeta.gibs_template } : null}
+        <CaseMap liveVessels={nearLive} darkVessels={darkScan?.targets} geojson={geo} selected={selected} onSelect={setSelected} showTracks={showTracks} timeCursor={cursor} acquisitionTime={c.acquisition_time} zones={showZones ? zones : null} zoneKinds={zoneKinds} gibs={showSat && satMeta ? { layer: satMeta.basemaps[0], template: satMeta.gibs_template } : null}
           overlay={showOverlay && overlayUrl && overlayMeta ? { url: overlayUrl, bounds: overlayMeta.bounds, opacity: overlayOpacity } : null} fitTo={fitTo} highlight={highlight} asset={asset} />
         <div className="absolute left-3 top-3 z-[1000] flex items-center gap-2">
           <Link to="/" data-testid="back-to-dashboard" className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-slate-200" style={overlayBtn}><ArrowLeft size={12} /> Cases</Link>
@@ -138,6 +150,7 @@ export default function CaseDetail() {
           <button data-testid="btn-focus-spill" onClick={focusSpill} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider" style={{ ...overlayBtn, color: focus ? "#FFB703" : "#F8FAFC" }}><Crosshair size={12} /> Focus spill</button>
           {hasRole(user, "supervisor") && <button data-testid="btn-prosecution-export" disabled={exporting} onClick={prosecutionExport} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-rose-200 disabled:opacity-50" style={{ ...overlayBtn, borderColor: "rgba(255,42,109,0.6)" }}><Gavel size={12} /> {exporting ? "Bundling…" : "Prosecution export"}</button>}
           <AssetSearch compact onSelect={(h) => { setFitTo(assetBounds(h)); setAsset(h); }} />
+          <span className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider" style={{ ...overlayBtn, color: liveAis?.state === "LIVE" ? "#10B981" : "#94A3B8" }} data-testid="map-live-vessels-chip" title="Live AISStream vessels within 250 km of the slick (green dots)">● live AIS {liveAis?.state || "…"} · {nearLive.length} near slick</span>
           {overlayMeta?.has_quicklook && (
             <span className="inline-flex items-center gap-2 rounded px-2.5 py-1.5" style={overlayBtn} data-testid="scene-overlay-control">
               <button data-testid="map-toggle-scene-overlay" onClick={() => setShowOverlay(!showOverlay)} className="inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-wider" style={{ color: showOverlay ? "#00F0FF" : "#94A3B8" }}><ImageIcon size={12} /> SAR quicklook</button>
@@ -196,13 +209,14 @@ export default function CaseDetail() {
               <p className="px-4 pt-3 text-[11px] text-slate-500" data-testid="candidates-disclaimer">{cands?.disclaimer || "Ranked candidates are decision-support output, not a legal determination."}</p>
               <Provenance caseId={id} />
               <CandidatesTable candidates={cands?.candidates} selected={selected} onSelect={setSelected} />
-              <DarkVessels caseId={id} onScan={setDarkScan} sceneStatus={c?.scene_status} onAttached={load} />
+              <DarkVessels caseId={id} onScan={setDarkScan} sceneStatus={c?.scene_status} acquisitionTime={c?.acquisition_time} onAttached={load} />
             </>
           )}
           {tab === "review" && <div className="space-y-4"><DetectorFeedback caseId={id} source={c.source} onSaved={load} /><ReviewForm caseId={id} candidates={cands?.candidates} reasonCodes={config?.reason_codes} resultVersion={cands?.version} onSaved={load} /></div>}
           {tab === "timeline" && <CaseTimeline caseId={id} caseNumber={c.case_number} />}
           {tab === "files" && <Attachments caseId={id} onChanged={load} />}
-          {tab === "response" && <div className="space-y-4"><Playbook caseId={id} /><div className="px-4 pb-4"><Precedents caseId={id} /></div></div>}
+          {tab === "response" && <div className="space-y-4"><ResponseEta caseId={id} /><Playbook caseId={id} /><div className="px-4 pb-4"><Precedents caseId={id} /></div></div>}
+          {tab === "scenes" && <SceneTimeline caseId={id} />}
           {tab === "vulnerability" && <Vulnerability caseId={id} spillGeojson={geo} />}
           {tab === "beforeafter" && <div className="h-[520px]"><BeforeAfter caseId={id} /></div>}
           {tab === "evidence" && <EvidenceTimeline evidence={evidence} />}

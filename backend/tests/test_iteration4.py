@@ -117,6 +117,8 @@ class TestEmailSettings:
                          json={"sender_email": "noreply@example.org"}, headers=admin_h, timeout=10)
         assert r.status_code == 200
         assert r.json()["sender_email"] == "noreply@example.org"
+        # restore the real sender so alert e-mails keep working
+        requests.put(f"{API}/settings/email", json={"sender_email": "onboarding@resend.dev"}, headers=admin_h, timeout=10)
 
     def test_set_key_masked_and_configured(self, admin_h):
         r = requests.put(f"{API}/settings/email",
@@ -141,13 +143,16 @@ class TestEmailSettings:
         r = requests.put(f"{API}/settings/email", json={"enabled": True}, headers=admin_h, timeout=10)
         assert r.json()["enabled"] is True
 
-    def test_clear_key_restores_unconfigured(self, admin_h):
-        # IMPORTANT: This restores env expected state.
+    def test_clear_key_falls_back_to_environment(self, admin_h):
+        # Clearing the DB override must fall back to the backend environment key (never mutate/inspect the secret itself).
         r = requests.put(f"{API}/settings/email", json={"resend_api_key": ""}, headers=admin_h, timeout=10)
         assert r.status_code == 200
         j = r.json()
-        assert j["configured"] is False
         assert j["source"] in ("env", "none")
+        if j["source"] == "env":
+            assert j["configured"] is True  # environment RESEND_API_KEY present → still configured
+        else:
+            assert j["configured"] is False
 
 
 # ---------- WATCHLIST ----------

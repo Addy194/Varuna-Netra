@@ -31,6 +31,10 @@ async def _startup_tasks():
     try:
         await ensure_indexes()
         await seed_users()
+        from dashboard import tag_origins
+        tagged = await tag_origins(db)
+        if tagged:
+            logger.info("case origin tagging: %s", tagged)
         await gazetteer.seed_gazetteer()
         await archive.seed_archive()
         zones_added = await seed_zones()

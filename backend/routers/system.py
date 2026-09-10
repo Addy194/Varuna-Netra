@@ -8,6 +8,7 @@ from db import db, clean, audit
 from models import REASON_CODES, ATTRIBUTION_STATUSES, SPILL_QUALITY_FLAGS, AIS_QUALITY_FLAGS, CorrelationParams
 from correlation import ALGORITHM_VERSION
 from services import MOCK_DETECTOR_VERSION
+from dashboard import compute_summary, real_alert_filter, REAL_ORIGINS
 
 router = APIRouter()
 
@@ -27,8 +28,11 @@ async def get_job(job_id: str, user=Depends(get_current_user)):
 
 
 @router.get("/alerts")
-async def list_alerts(unacknowledged: bool = False, limit: int = Query(100, le=500), user=Depends(get_current_user)):
+async def list_alerts(unacknowledged: bool = False, include_demo: bool = False, limit: int = Query(100, le=500), user=Depends(get_current_user)):
     q = {"acknowledged": False} if unacknowledged else {}
+    if not include_demo:
+        excluded = [c["id"] for c in await db.cases.find({"origin": {"$nin": REAL_ORIGINS}}, {"_id": 0, "id": 1}).to_list(10000)]
+        q = {**real_alert_filter(excluded), **q}
     return clean(await db.alerts.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit))
 
 
@@ -65,17 +69,16 @@ async def config_defaults(user=Depends(get_current_user)):
     }
 
 
+@router.get("/dashboard/summary")
+async def dashboard_summary(user=Depends(get_current_user)):
+    """Canonical counters for header + dashboard. Pure DB aggregation; demo/seed/test records excluded (see dashboard.SEMANTICS)."""
+    return clean(await compute_summary(db))
+
+
 @router.get("/stats")
 async def stats(user=Depends(get_current_user)):
-    by_status = {s: await db.cases.count_documents({"attribution_status": s}) for s in ATTRIBUTION_STATUSES}
-    return {
-        "cases_total": await db.cases.count_documents({}),
-        "by_attribution_status": by_status,
-        "pending_review": await db.cases.count_documents({"review_state": "pending"}),
-        "alerts_unacknowledged": await db.alerts.count_documents({"acknowledged": False}),
-        "scenes": await db.scenes.count_documents({}),
-        "spill_observations": await db.spill_observations.count_documents({}),
-        "ais_positions": await db.ais_positions.estimated_document_count(),
-        "jobs_running": await db.jobs.count_documents({"status": {"$in": ["queued", "running"]}}),
-        "jobs_failed": await db.jobs.count_documents({"status": "failed"}),
-    }
+    """Legacy shape, now derived from the same canonical summary."""
+    s = await compute_summary(db)
+    return clean({"cases_total": s["cases"]["total"], "by_attribution_status": {k: s["cases"]["by_attribution_status"].get(k, 0) for k in ATTRIBUTION_STATUSES},
+                  "pending_review": s["pending"]["total"], "alerts_unacknowledged": s["alerts"]["unread"], **s["observations"],
+                  "jobs_running": s["jobs"]["running"], "jobs_failed": s["jobs"]["failed"], "source": "dashboard/summary"})

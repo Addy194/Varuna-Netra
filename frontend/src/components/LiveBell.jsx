@@ -7,7 +7,7 @@ export const LiveBell = () => {
   const nav = useNavigate();
   if (!live) return null;
   return (
-    <button data-testid="live-bell" onClick={() => { live.clearUnread(); nav("/jobs"); }} title={`Live feed: ${live.mode}`} className="relative inline-flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-slate-300 hover:text-white">
+    <button data-testid="live-bell" onClick={() => { live.clearUnread(); nav("/alerts"); }} title={`Live feed: ${live.mode}`} className="relative inline-flex items-center gap-1.5 rounded px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-slate-300 hover:text-white">
       <Bell size={14} />
       {live.unread > 0 && <span data-testid="live-bell-count" className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full px-1 text-[9px] font-bold text-slate-950" style={{ background: "#FF2A6D" }}>{live.unread}</span>}
       <span data-testid="live-mode" className="hidden lg:inline" style={{ color: live.mode === "live" ? "#10B981" : live.mode === "polling" ? "#FFB703" : "#64748B" }}>{live.mode === "live" ? <Wifi size={10} className="inline" /> : <RefreshCw size={10} className="inline" />} {live.mode}</span>

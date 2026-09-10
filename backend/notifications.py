@@ -20,7 +20,7 @@ def alert_html(alert: dict, case: dict) -> str:
     return f"""
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#0A0E17;padding:32px;font-family:Arial,sans-serif;color:#F8FAFC"><tr><td align="center">
 <table width="560" cellpadding="0" cellspacing="0" style="background:#162032;border:1px solid #334155;border-radius:8px;padding:28px">
-<tr><td style="font-size:20px;font-weight:bold">Sentinel<span style="color:#00F0FF">Mar</span> — alert <span style="color:{SEV_COLOR.get(alert['severity'], '#FFB703')};font-size:12px;text-transform:uppercase;letter-spacing:.1em">{e(alert['severity'])} · {e(alert.get('kind', 'high_confidence'))}</span></td></tr>
+<tr><td style="font-size:20px;font-weight:bold">Varuna<span style="color:#00F0FF">Netra</span> — alert <span style="color:{SEV_COLOR.get(alert['severity'], '#FFB703')};font-size:12px;text-transform:uppercase;letter-spacing:.1em">{e(alert['severity'])} · {e(alert.get('kind', 'high_confidence'))}</span></td></tr>
 <tr><td style="padding-top:14px;font-size:14px;line-height:20px;color:#CBD5E1">{e(alert['message'])}</td></tr>
 <tr><td style="padding-top:12px;font-size:12px;color:#94A3B8">Case {e(case['case_number'])} · acquired {case['acquisition_time'].strftime('%Y-%m-%d %H:%MZ')} · jurisdiction {e(pj)} · attribution {e(case.get('attribution_status', ''))}</td></tr>
 {icg_line}
@@ -32,7 +32,7 @@ def alert_html(alert: dict, case: dict) -> str:
 async def recipients_for_alerts(icg_code: str = None) -> list:
     """District desk recipients (ICG) first, then supervisors/admins, then admin-configured extra recipients."""
     cfg = await get_config()
-    users = await db.users.find({"active": True, "role": {"$in": ["supervisor", "admin"]}, "notify_alerts": {"$ne": False}}, {"_id": 0, "email": 1}).to_list(500)
+    users = await db.users.find({"active": True, "role": {"$in": ["analyst", "supervisor", "admin"]}, "notify_alerts": {"$ne": False}}, {"_id": 0, "email": 1}).to_list(500)
     district = []
     if icg_code:
         d = await db.icg_districts.find_one({"code": icg_code}, {"_id": 0, "recipients": 1})

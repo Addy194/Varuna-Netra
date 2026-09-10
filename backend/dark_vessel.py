@@ -128,17 +128,27 @@ async def scan_case(case_id: str, actor: str = "system", radius_km: float = 40.0
     except Exception as e:  # noqa: BLE001
         raise ValueError(f"Dark-vessel analysis failed: {str(e)[:160]}")
     near = [t for t in det["targets"] if haversine_km(t["lat"], t["lon"], c_lat, c_lon) <= radius_km]
+    try:
+        from playbook import _globe
+        globe = _globe()
+        land = sum(1 for t in near if globe.is_land(t["lat"], t["lon"]))
+        near = [t for t in near if not globe.is_land(t["lat"], t["lon"])]
+    except Exception:  # noqa: BLE001
+        land = None
     fixes = await _ais_around(t0, c_lat, c_lon, radius_km)
     axis = major_axis_bearing(shape(spill["geometry"]))
     out = [_classify_target(t, fixes, axis, c_lat, c_lon) for t in near]
     now = datetime.now(timezone.utc)
     scan = {"id": new_id(), "case_id": case_id, "scene_id": scene["id"], "version": DARK_VESSEL_VERSION, "acquisition_time": t0, "radius_km": radius_km, "dark_radius_km": DARK_RADIUS_KM,
             "time_window_min": TIME_WINDOW_MIN, "targets": out, "bright_targets_total": det["total"], "ais_fixes_checked": len(fixes), "dark_count": sum(1 for r in out if r["dark_candidate"]),
-            "ais_available": bool(fixes), "ais_note": None if fixes else "No AIS fixes in the ±30 min window — unmatched targets cannot be interpreted as dark vessels until AIS coverage exists.",
+            "ais_available": bool(fixes), "land_targets_removed": land, "ais_note": None if fixes else "No AIS fixes in the ±30 min window — unmatched targets cannot be interpreted as dark vessels until AIS coverage exists.",
             "actor": actor, "created_at": now, "experimental": True, "analysis_input": analysis_input, "provider_scene_id": scene["provider_scene_id"],
             "disclaimer": "EXPERIMENTAL CFAR bright-target heuristic on a rendered Sentinel-1 window (rescaled 8-bit, no ML). Platforms, buoys, islands, azimuth ambiguities and ship wakes cause false alarms; AIS gaps ≠ intent. Requires analyst review."}
     await db.dark_vessel_scans.insert_one(dict(scan))
     await db.cases.update_one({"id": case_id}, {"$set": {"dark_vessels": {"scan_id": scan["id"], "dark_count": scan["dark_count"], "targets": len(out), "at": now}}})
+    if scan["dark_count"] and fixes:
+        from services import raise_threat_alert
+        await raise_threat_alert("dark_vessel", case, f"{scan['dark_count']} bright SAR target(s) within {radius_km:.0f} km with no AIS match (±{TIME_WINDOW_MIN} min) — experimental CFAR", actor)
     await audit("case", case_id, "dark_vessel.scanned", {"dark_count": scan["dark_count"], "targets": len(out), "bright_total": det["total"], "version": DARK_VESSEL_VERSION}, actor)
     scan.pop("_id", None)
     return scan

@@ -19,8 +19,19 @@ Frontend: http://localhost:3000 · API: http://localhost:8000/docs
 - Local filesystem storage is the default; external object storage is optional.
 - Architecture, quickstart, demo script, and model card are documented under `docs/`.
 
+## Real Sentinel-1 ML path
+The repository now also contains the training/evaluation path for `sar_spill_seg_v2`, a dual-polarization **VV + VH U-Net semantic-segmentation model** intended to replace the synthetic baseline after real training and validation.
+
+The selected public dataset is the three-part Sentinel-1 SAR oil-spill dataset by Trujillo-Acatitla et al.:
+
+- Part I — oil-spill train/validation: DOI `10.5281/zenodo.8346860`
+- Part II — no-oil and look-alike train/validation: DOI `10.5281/zenodo.8253899`
+- Part III — untouched independent test set: DOI `10.5281/zenodo.13761290`
+
+Training code is under `backend/training/`. It splits **complete source scenes before tile generation** to avoid train/validation leakage, uses both SAR polarizations, and evaluates Dice, IoU, precision, recall, F1 and false-positive scene rates. Dataset TIFFs and checkpoints remain outside GitHub. See `docs/REAL_SAR_TRAINING.md`.
+
 ## Important ML limitation
-The bundled model is trained on synthetic SAR-like chips so that the repository is runnable offline. Its bundled holdout metrics are synthetic-demo metrics only. Real Sentinel-1 labelled validation is still required before operational deployment; the UI and API therefore label outputs as **ML candidates requiring analyst review**.
+The detector currently bundled with the production/demo backend is still `sar_spill_pixel_v1`, trained on synthetic SAR-like chips so that the repository remains runnable offline. Its bundled holdout metrics are synthetic-demo metrics only. The new `sar_spill_seg_v2` code is a real-data training pipeline, **not a claim that a real-data checkpoint has already been trained**. Until a checkpoint is trained and independently evaluated, the UI and API must continue to label automated detections as **ML candidates requiring analyst review**.
 
 ## Live integrations
 Set `AIS_MODE=live` with `AISSTREAM_API_KEY` for live AISStream. Set `EMAIL_MODE=live` with `RESEND_API_KEY` and `SENDER_EMAIL` for live email.

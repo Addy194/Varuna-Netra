@@ -1,0 +1,3 @@
+# Optional production inference dependency for sar_spill_seg_v2.
+# Install only when deploying a trained checkpoint; the baseline API remains PyTorch-free.
+torch>=2.2,<3

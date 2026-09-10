@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+import planetary_computer as pc
 
 STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 COLLECTIONS = {
@@ -33,7 +34,7 @@ async def search_scenes(bbox: list, start: str, end: str, collection: str = "sen
         r = await c.post(f"{STAC}/search", json=body)
         r.raise_for_status()
         d = r.json()
-    return {"count": len(d.get("features", [])), "matched": (d.get("context") or {}).get("matched"), "scenes": [_normalize(f) for f in d.get("features", [])], "source": "Microsoft Planetary Computer STAC (open, no key)"}
+    return {"count": len(d.get("features", [])), "matched": (d.get("context") or {}).get("matched"), "scenes": [_normalize(f) for f in d.get("features", [])], "source": "Microsoft Planetary Computer STAC (open; assets signed at access time)"}
 
 
 async def get_item(collection: str, stac_id: str) -> dict:
@@ -41,6 +42,21 @@ async def get_item(collection: str, stac_id: str) -> dict:
         r = await c.get(f"{STAC}/collections/{collection}/items/{stac_id}")
         r.raise_for_status()
         return _normalize(r.json())
+
+
+async def _access_href(href: str) -> str:
+    """Return an access-ready URL.
+
+    Microsoft Planetary Computer STAC metadata intentionally exposes unsigned
+    Azure Blob HREFs. The SDK obtains a short-lived SAS token for protected
+    assets. Public/non-Blob URLs are returned unchanged by ``pc.sign``.
+    """
+    try:
+        return await asyncio.to_thread(pc.sign, href)
+    except Exception:
+        # Keep public previews usable even if the signing service is temporarily
+        # unavailable; protected assets will still fail clearly in fetch_asset.
+        return href
 
 
 _preview_cache: dict = {}
@@ -55,7 +71,7 @@ async def fetch_preview(href: str, fallback: str | None = None) -> tuple[bytes, 
             if not url:
                 continue
             try:
-                r = await c.get(url)
+                r = await c.get(await _access_href(url))
                 r.raise_for_status()
                 out = (r.content, r.headers.get("content-type", "image/png"))
                 if len(_preview_cache) > 300:
@@ -69,5 +85,8 @@ async def fetch_preview(href: str, fallback: str | None = None) -> tuple[bytes, 
 
 
 async def fetch_asset(href: str) -> tuple[bytes, str]:
+    access_href = await _access_href(href)
     async with httpx.AsyncClient(timeout=180, follow_redirects=True) as c:
-        r = await c.get(href); r.raise_for_status(); return r.content, r.headers.get("content-type", "application/octet-stream")
+        r = await c.get(access_href)
+        r.raise_for_status()
+        return r.content, r.headers.get("content-type", "application/octet-stream")

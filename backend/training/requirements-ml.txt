@@ -1,5 +1,9 @@
 # Install separately from backend runtime dependencies.
-# For CUDA-specific PyTorch wheels, use the official PyTorch install selector.
+# For CUDA-specific PyTorch wheels, use the official PyTorch install selector first
+# if you want a CUDA build, then install this file.
 torch>=2.2,<3
 numpy>=1.26,<3
 rasterio==1.4.4
+requests>=2.31,<3
+tqdm>=4.66,<5
+py7zr>=0.22,<1

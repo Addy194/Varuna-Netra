@@ -20,6 +20,7 @@ from jurisdiction import seed_zones, apply_to_case
 import marine_regions  # noqa: F401  (registers import_eez job handler)
 from seed import seed_demo
 from correlation import ALGORITHM_VERSION
+from sar_segmentation_runtime import runtime_status as sar_segmentation_status, warmup as warmup_sar_segmentation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("varunanetra")
@@ -38,6 +39,18 @@ async def lifespan(app: FastAPI):
     zones_added = await seed_zones()
     await seed_icg()
     await seed_sites()
+
+    try:
+        seg = await asyncio.to_thread(warmup_sar_segmentation)
+        if seg.get("loaded"):
+            logger.info("SAR segmentation v2 loaded: %s on configured runtime", seg.get("checkpoint"))
+        else:
+            logger.info("SAR segmentation v2 unavailable; baseline fallback active: %s", seg.get("reason"))
+    except Exception:
+        # SAR_SEG_ENABLE=force intentionally makes a broken/missing v2 checkpoint a startup error.
+        logger.exception("SAR segmentation v2 startup validation failed")
+        raise
+
     jobs.start()
     ais_live.start()
     if storage_available():
@@ -72,6 +85,7 @@ async def root():
         "algorithm_version": ALGORITHM_VERSION,
         "status": "ok",
         "mode": "demo" if demo_mode_enabled() else "real-data",
+        "sar_segmentation": sar_segmentation_status(),
     }
 
 

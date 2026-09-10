@@ -7,7 +7,7 @@ from auth import get_current_user, require_role, ROLES
 from db import db, clean, audit
 from models import REASON_CODES, ATTRIBUTION_STATUSES, SPILL_QUALITY_FLAGS, AIS_QUALITY_FLAGS, CorrelationParams
 from correlation import ALGORITHM_VERSION
-from detector import model_info, DETECTOR_VERSION
+from detector import model_info
 import jobs
 from storage import STORAGE_MODE
 from ais_live import get_config as get_ais_config
@@ -54,11 +54,12 @@ async def list_audit(entity_id: Optional[str] = None, limit: int = Query(200, le
 
 @router.get("/config/defaults")
 async def config_defaults(user=Depends(get_current_user)):
+    detector = model_info()
     return {
         "algorithm_version": ALGORITHM_VERSION,
         "runtime": {"storage_mode": STORAGE_MODE, "job_workers": jobs.WORKER_COUNT, "job_max_attempts": jobs.MAX_ATTEMPTS, "job_lease_seconds": jobs.LEASE_SECONDS},
-        "detector": model_info(),
-        "detector_version": DETECTOR_VERSION,
+        "detector": detector,
+        "detector_version": detector.get("detector_version"),
         "correlation_params": CorrelationParams().model_dump(),
         "attribution_statuses": ATTRIBUTION_STATUSES,
         "spill_quality_flags": SPILL_QUALITY_FLAGS,

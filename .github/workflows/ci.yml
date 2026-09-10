@@ -48,6 +48,25 @@ jobs:
           REACT_APP_BACKEND_URL: http://localhost:8000
         run: yarn build
 
+  sar-v2-runtime-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CPU PyTorch smoke dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.2,<3"
+          pip install "numpy>=1.26,<3" pytest
+
+      - name: Load a temporary v2 checkpoint and run VV+VH inference
+        working-directory: backend
+        run: pytest -q tests/test_sar_segmentation_v2_smoke.py
+
   compose-smoke:
     runs-on: ubuntu-latest
     steps:

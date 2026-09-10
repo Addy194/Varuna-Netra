@@ -25,37 +25,56 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("sentinelmar")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await ensure_indexes()
-    await seed_users()
-    await gazetteer.seed_gazetteer()
-    await archive.seed_archive()
-    zones_added = await seed_zones()
-    await seed_icg()
-    await seed_sites()
-    jobs.start()
-    ais_live.start()
-    if storage_available():
-        try:
-            await asyncio.to_thread(init_storage)
-            logger.info("object storage initialised")
-        except Exception as e:  # noqa: BLE001
-            logger.error("object storage init failed: %s", e)
+async def _startup_tasks():
+    """Indexes, seeds and background workers — run after the server is listening so health probes pass immediately."""
     try:
+        await ensure_indexes()
+        await seed_users()
+        await gazetteer.seed_gazetteer()
+        await archive.seed_archive()
+        zones_added = await seed_zones()
+        await seed_icg()
+        await seed_sites()
+        if storage_available():
+            try:
+                await asyncio.to_thread(init_storage)
+                logger.info("object storage initialised")
+            except Exception as e:  # noqa: BLE001
+                logger.error("object storage init failed: %s", e)
         res = await seed_demo()
         logger.info("seed: %s", res)
         if zones_added:
             for c in await db.cases.find({"primary_jurisdiction": {"$exists": False}}, {"id": 1}).to_list(1000):
                 await apply_to_case(c["id"], "system")
+        app.state.ready = True
     except Exception:
-        logger.exception("seed failed")
+        logger.exception("startup tasks failed")
+        app.state.startup_error = True
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.ready = False
+    jobs.start()
+    ais_live.start()
+    task = asyncio.create_task(_startup_tasks())
     yield
+    task.cancel()
     client.close()
 
 
 app = FastAPI(title="Varuna Netra — Oil-Spill Detection & Vessel Correlation", version="0.1.0", lifespan=lifespan)
 api = APIRouter(prefix="/api")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "ready": bool(getattr(app.state, "ready", False))}
+
+
+@api.get("/health")
+async def api_health():
+    return {"status": "ok", "ready": bool(getattr(app.state, "ready", False))}
 
 
 @api.get("/")

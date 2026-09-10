@@ -1,10 +1,9 @@
 import io
 import math
+import os
 from datetime import datetime, timezone
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig")
 from PIL import Image as PILImage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -24,6 +23,9 @@ def _fmt(v):
 
 
 def render_map_png(geometries: dict) -> bytes:
+    import matplotlib  # lazy: avoids font-cache build at process start
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
     feats = geometries.get("features", [])
     fig, ax = plt.subplots(figsize=(7.2, 5.2), dpi=130)
     fig.patch.set_facecolor("#0A0E17")

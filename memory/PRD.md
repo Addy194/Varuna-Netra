@@ -121,6 +121,11 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 ## Implemented (iteration 16 — rebrand)
 - Product renamed **SentinelMar → Varuna Netra** everywhere user-facing: header/login logo, browser title, API title, PDF author/footer, email subjects, timeline share footer, verify page, prosecution messages, OSM User-Agent, ICG seed source. Internal identifiers intentionally kept: demo emails `@sentinelmar.demo`, `APP_NAME` storage prefix, `sentinelmar:unauthorized` DOM event, test file names.
 
+## Implemented (iteration 17 — production deploy fix)
+- Root cause of k8s readiness timeout: no root `/health` route (only `/api/*`), lifespan blocked on Atlas index creation + 7 seeders before uvicorn bound, and matplotlib/cv2/global_land_mask imported at process start (font-cache build) → probe refused → restart loop.
+- Fix: `GET /health` + `GET /api/health` (`{status, ready}`); seeds/indexes run in a background task after bind (`app.state.ready`); lazy imports (`report.render_map_png`, `playbook._globe`, `lazy_libs.cv2` proxy), `MPLCONFIGDIR=/tmp/mplconfig`. `import server` 0.8s. Also `.gitignore` `.env` lines had been re-added by an auto commit — removed again (deployment_agent PASS).
+- Note: `scripts/refactor_baseline.py compare` now shows expected data-driven diffs (brand rename in PDF text; live weather fetched on some cases) — re-run `capture` before the next pure refactor.
+
 ## Backlog (prioritized)
 - P1: Resend + aisstream keys; U-Net SAR segmentation; OpenDrift forward drift; socio-economic vulnerability (Overpass POIs); WhatsApp citizen reports; i18n (Hindi/Tamil/Marathi); outbound port-authority webhooks (HMAC); ErrorBoundary around CaseDetail; exponential lockout backoff.
 - P2: Additional met/ocean providers, replay testing harness, observability/metrics, SAR segmentation model once labeled data exists, separate worker process (Celery/Redis).

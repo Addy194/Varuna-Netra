@@ -4,7 +4,7 @@ import io
 from datetime import datetime, timedelta, timezone
 from typing import List
 
-import cv2
+from lazy_libs import cv2
 import numpy as np
 from PIL import Image
 from shapely.geometry import shape

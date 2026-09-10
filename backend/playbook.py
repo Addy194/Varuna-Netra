@@ -2,8 +2,7 @@ import math
 from datetime import timedelta
 from typing import Optional, Tuple
 
-import numpy as np  # noqa: F401  (kept: global_land_mask depends on numpy being importable)
-from global_land_mask import globe
+import numpy as np
 from shapely.geometry import shape
 
 from db import db, to_utc
@@ -13,10 +12,17 @@ from correlation_env import drift_vector_ms
 PLAYBOOK_VERSION = "playbook-rules-0.1.0"
 THICKNESS_UM = {"sheen": 0.1, "thin": 1.0, "thick": 10.0}  # µm assumptions per appearance class
 DISPERSANT_WIND = (4, 12)
+_ = np  # numpy must be importable for global_land_mask
+
+
+def _globe():
+    from global_land_mask import globe  # lazy: loads a large mask array
+    return globe
 
 
 def coast_distance_km(lat: float, lon: float, max_km: float = 300) -> Tuple[float, str]:
     """Approximate distance to nearest land using the 1-km global land mask (radial search)."""
+    globe = _globe()
     if globe.is_land(lat, lon):
         return 0.0, "on land mask (shoreline/estuary)"
     for r in [1, 2, 5, 10, 15, 20, 30, 40, 50, 75, 100, 150, 200, 300]:

@@ -3,7 +3,7 @@ import math
 from datetime import datetime, timezone
 from typing import Optional
 
-import cv2
+from lazy_libs import cv2
 import numpy as np
 from PIL import Image
 from shapely.geometry import Polygon, shape

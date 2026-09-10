@@ -1,0 +1,135 @@
+name: Train SAR v2 on GPU
+
+on:
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: Training epochs
+        required: true
+        default: '30'
+      batch_size:
+        description: Training batch size
+        required: true
+        default: '4'
+      workers:
+        description: DataLoader workers
+        required: true
+        default: '2'
+      promote:
+        description: Run checkpoint promotion gate after Part III evaluation
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sar-v2-real-training
+  cancel-in-progress: false
+
+jobs:
+  train-evaluate:
+    # Attach a Linux x64 CUDA machine as a self-hosted GitHub runner and label it `gpu`.
+    # The workflow intentionally refuses CPU-only execution.
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 1440
+    env:
+      DATA_ROOT: ${{ runner.temp }}/varuna-sar-data
+      CHECKPOINT: checkpoints/sar_spill_seg_v2.pt
+      METRICS: checkpoints/sar_spill_seg_v2_test_metrics.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify CUDA GPU and working disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v nvidia-smi >/dev/null || { echo 'ERROR: nvidia-smi not found; attach a CUDA GPU runner.'; exit 1; }
+          nvidia-smi
+          python - <<'PY'
+          import shutil
+          from pathlib import Path
+          root = Path('${{ runner.temp }}')
+          free = shutil.disk_usage(root).free / (1024**3)
+          print(f'Free disk: {free:.1f} GiB')
+          if free < 160:
+              raise SystemExit('ERROR: at least 160 GiB free disk is required for the real SAR pipeline.')
+          PY
+
+      - name: Install ML dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r backend/training/requirements-ml.txt
+          python - <<'PY'
+          import torch
+          print('PyTorch:', torch.__version__)
+          print('CUDA available:', torch.cuda.is_available())
+          if not torch.cuda.is_available():
+              raise SystemExit('ERROR: PyTorch cannot access CUDA on this runner.')
+          print('GPU:', torch.cuda.get_device_name(0))
+          props = torch.cuda.get_device_properties(0)
+          print(f'VRAM: {props.total_memory / (1024**3):.1f} GiB')
+          PY
+
+      - name: Download, train and independently evaluate on Part III
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p checkpoints "$DATA_ROOT"
+          python backend/training/run_real_sar_pipeline.py \
+            --data-root "$DATA_ROOT" \
+            --checkpoint "$CHECKPOINT" \
+            --metrics-output "$METRICS" \
+            --epochs '${{ inputs.epochs }}' \
+            --batch-size '${{ inputs.batch_size }}' \
+            --workers '${{ inputs.workers }}'
+
+      - name: Verify generated evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$CHECKPOINT"
+          test -s "$METRICS"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('checkpoints/sar_spill_seg_v2_test_metrics.json')
+          d = json.loads(p.read_text())
+          print('Independent Part III metrics:')
+          print(json.dumps(d.get('overall', {}), indent=2))
+          print('Scene false-positive rates:')
+          print(json.dumps(d.get('scene_false_positive_rate', {}), indent=2))
+          if d.get('test_dataset_doi') != '10.5281/zenodo.13761290':
+              raise SystemExit('ERROR: metrics are not marked as Part III evaluation.')
+          PY
+
+      - name: Run safe checkpoint promotion gate
+        if: ${{ inputs.promote }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python backend/training/promote_segmentation_checkpoint.py \
+            --checkpoint "$CHECKPOINT" \
+            --metrics "$METRICS"
+
+      - name: Upload checkpoint and Part III evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sar-spill-seg-v2-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            checkpoints/sar_spill_seg_v2.pt
+            checkpoints/sar_spill_seg_v2.json
+            checkpoints/sar_spill_seg_v2_history.json
+            checkpoints/sar_spill_seg_v2_test_metrics.json
+            checkpoints/sar_spill_seg_v2.deployment.json

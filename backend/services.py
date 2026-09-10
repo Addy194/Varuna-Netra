@@ -73,6 +73,13 @@ async def create_spill_observation(payload: SpillObservationCreate, actor="syste
         case["icg"] = icg
     except Exception as e:  # noqa: BLE001
         logging.getLogger("services").error("ICG routing failed: %s", e)
+    try:
+        if payload.source not in ("test", "demo") and not str(payload.source).startswith("mock"):
+            import ais_live
+            b = poly.bounds  # (minx=W, miny=S, maxx=E, maxy=N)
+            await ais_live.coverage_for_spill([b[1], b[0], b[3], b[2]], case_id)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("services").error("AIS coverage follow failed: %s", e)
     await audit("spill_observation", spill_id, "spill.created", {"case_id": case_id, "source": payload.source, "processing_version": payload.processing_version}, actor)
     await audit("case", case_id, "case.opened", {"spill_observation_id": spill_id, "primary_jurisdiction": (case.get("primary_jurisdiction") or {}).get("code")}, actor)
     try:

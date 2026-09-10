@@ -9,7 +9,8 @@ from starlette.middleware.cors import CORSMiddleware
 from db import db, client, ensure_indexes
 import jobs
 import services  # noqa: F401  (registers job handlers)
-from routers import ingest, cases, system, auth as auth_router, jurisdictions, watchlist, timeline, attachments, rules as rules_router, satellite, ais_live as ais_live_router, scene_watch as scene_watch_router, imagery, live, gazetteer, archive, prosecution, icg as icg_router, vulnerability as vulnerability_router, dark_vessel as dark_vessel_router
+from routers import ingest, cases, system, auth as auth_router, jurisdictions, watchlist, timeline, attachments, rules as rules_router, satellite, ais_live as ais_live_router, scene_watch as scene_watch_router, imagery, live, gazetteer, archive, prosecution, icg as icg_router, vulnerability as vulnerability_router, dark_vessel as dark_vessel_router, realtime as realtime_router
+from livemode import DEMO_MODE, seed_india_watches
 from icg import seed_icg
 from vulnerability import seed_sites
 import ais_live
@@ -35,13 +36,15 @@ async def _startup_tasks():
         zones_added = await seed_zones()
         await seed_icg()
         await seed_sites()
+        await seed_india_watches()
         if storage_available():
             try:
                 await asyncio.to_thread(init_storage)
                 logger.info("object storage initialised")
             except Exception as e:  # noqa: BLE001
                 logger.error("object storage init failed: %s", e)
-        res = await seed_demo()
+        purged = await db.settings.find_one({"key": "data_mode", "demo_purged": True}, {"_id": 1})
+        res = await seed_demo() if (DEMO_MODE and not purged) else {"seeded": False, "reason": "LIVE mode — demo seeding disabled"}
         logger.info("seed: %s", res)
         if zones_added:
             for c in await db.cases.find({"primary_jurisdiction": {"$exists": False}}, {"id": 1}).to_list(1000):
@@ -60,6 +63,10 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(_startup_tasks())
     yield
     task.cancel()
+    ais_live.stop()
+    jobs_stop = getattr(jobs, "stop", None)
+    if jobs_stop:
+        jobs_stop()
     client.close()
 
 
@@ -101,6 +108,7 @@ api.include_router(live.router)
 api.include_router(icg_router.router)
 api.include_router(vulnerability_router.router)
 api.include_router(dark_vessel_router.router)
+api.include_router(realtime_router.router)
 api.include_router(gazetteer.router)
 api.include_router(archive.router)
 api.include_router(prosecution.router)

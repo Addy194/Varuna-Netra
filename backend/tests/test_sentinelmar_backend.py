@@ -225,7 +225,7 @@ def test_ais_invalid_lat(s):
 
 def test_ais_vessels_and_positions(s):
     r = s.get(f"{API}/ais/vessels")
-    assert r.status_code == 200 and isinstance(r.json(), list)
+    assert r.status_code == 200 and isinstance(r.json()["indexed"], list) and isinstance(r.json()["vessels"], list)
     r = s.get(f"{API}/ais/positions", params={"mmsi": "244123456"})
     assert r.status_code == 200
 

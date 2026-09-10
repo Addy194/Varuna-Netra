@@ -73,11 +73,39 @@ def _classify_target(t: dict, fixes: List[dict], axis: float, c_lat: float, c_lo
     return rec
 
 
-async def _scene_with_imagery(case: dict) -> dict:
+async def _scene_with_imagery(case: dict, actor: str) -> tuple[dict, dict]:
+    """Resolve the REAL SAR analysis asset (not the thumbnail). Auto-attaches the covering Sentinel-1 scene when none is linked."""
+    from sentinel_assets import resolve_scene_assets, auto_attach_scene
     scene = await db.scenes.find_one({"id": case.get("scene_id")}, {"_id": 0}) if case.get("scene_id") else None
-    if not scene or not (scene.get("quicklook_path") or (scene.get("metadata") or {}).get("preview_href") or scene.get("stac_href")):
-        raise ValueError("no Sentinel-1 quicklook is attached to this case's scene — dark-vessel scan needs real SAR imagery")
-    return scene
+    if not scene:
+        scene = await auto_attach_scene(case, actor)
+    st = await resolve_scene_assets(scene)
+    if not st["sar_available"]:
+        raise ValueError(f"Dark-vessel scan unavailable — {st['reason']}")
+    return scene, st
+
+
+async def _analysis_image(scene: dict, st: dict, c_lat: float, c_lon: float, radius_km: float) -> tuple[bytes, list, dict]:
+    """Preferred input: AOI window rendered from the real SAR COG (≈ full-res subset). Fallback: scene quicklook."""
+    from sentinel_assets import sar_bbox_png
+    from shapely.geometry import shape as _shape
+    scene_bbox = (scene.get("metadata") or {}).get("bbox") or list(_shape(scene["footprint"]).bounds)
+    dlat = radius_km / 110.574
+    dlon = radius_km / (111.32 * max(abs(np.cos(np.radians(c_lat))), 0.1))
+    aoi = [max(scene_bbox[0], c_lon - dlon), max(scene_bbox[1], c_lat - dlat), min(scene_bbox[2], c_lon + dlon), min(scene_bbox[3], c_lat + dlat)]
+    if aoi[0] < aoi[2] and aoi[1] < aoi[3]:
+        try:
+            png = await sar_bbox_png(st["collection"], scene["provider_scene_id"], st["analysis_asset"], aoi)
+            return png, aoi, {"kind": "sar_aoi_window", "asset": st["analysis_asset"], "bbox": aoi, "size_px": 1024, "note": "AOI window rendered server-side from the real Sentinel-1 GRD COG (Planetary Computer data API)."}
+        except Exception as e:  # noqa: BLE001
+            fallback_reason = str(e)[:160]
+    else:
+        fallback_reason = "spill AOI lies outside the scene footprint"
+    try:
+        png = await get_quicklook(scene)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"Raster download failed ({fallback_reason}); quicklook fallback also failed: {str(e)[:120]}")
+    return png, scene_bbox, {"kind": "scene_quicklook", "asset": st.get("native_preview_asset") or "generated", "bbox": scene_bbox, "fallback_reason": fallback_reason}
 
 
 async def _ais_around(t0: datetime, c_lat: float, c_lon: float, radius_km: float) -> List[dict]:
@@ -90,12 +118,15 @@ async def scan_case(case_id: str, actor: str = "system", radius_km: float = 40.0
     case = await db.cases.find_one({"id": case_id}, {"_id": 0})
     if not case:
         raise ValueError("case not found")
-    scene = await _scene_with_imagery(case)
+    scene, st = await _scene_with_imagery(case, actor)
     spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0})
     t0 = spill["acquisition_time"].replace(tzinfo=timezone.utc) if spill["acquisition_time"].tzinfo is None else spill["acquisition_time"]
     c_lon, c_lat = spill["centroid"]["coordinates"]
-    bbox = (scene.get("metadata") or {}).get("bbox") or list(shape(scene["footprint"]).bounds)
-    det = detect_bright_targets(await get_quicklook(scene), bbox)
+    png, bbox, analysis_input = await _analysis_image(scene, st, c_lat, c_lon, radius_km)
+    try:
+        det = detect_bright_targets(png, bbox)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"Dark-vessel analysis failed: {str(e)[:160]}")
     near = [t for t in det["targets"] if haversine_km(t["lat"], t["lon"], c_lat, c_lon) <= radius_km]
     fixes = await _ais_around(t0, c_lat, c_lon, radius_km)
     axis = major_axis_bearing(shape(spill["geometry"]))
@@ -103,8 +134,9 @@ async def scan_case(case_id: str, actor: str = "system", radius_km: float = 40.0
     now = datetime.now(timezone.utc)
     scan = {"id": new_id(), "case_id": case_id, "scene_id": scene["id"], "version": DARK_VESSEL_VERSION, "acquisition_time": t0, "radius_km": radius_km, "dark_radius_km": DARK_RADIUS_KM,
             "time_window_min": TIME_WINDOW_MIN, "targets": out, "bright_targets_total": det["total"], "ais_fixes_checked": len(fixes), "dark_count": sum(1 for r in out if r["dark_candidate"]),
-            "actor": actor, "created_at": now, "experimental": True,
-            "disclaimer": "EXPERIMENTAL CFAR bright-target heuristic on a rendered quicklook (not full-resolution SAR, no ML). Platforms, buoys, islands, azimuth ambiguities and ship wakes cause false alarms; AIS gaps ≠ intent. Requires analyst review."}
+            "ais_available": bool(fixes), "ais_note": None if fixes else "No AIS fixes in the ±30 min window — unmatched targets cannot be interpreted as dark vessels until AIS coverage exists.",
+            "actor": actor, "created_at": now, "experimental": True, "analysis_input": analysis_input, "provider_scene_id": scene["provider_scene_id"],
+            "disclaimer": "EXPERIMENTAL CFAR bright-target heuristic on a rendered Sentinel-1 window (rescaled 8-bit, no ML). Platforms, buoys, islands, azimuth ambiguities and ship wakes cause false alarms; AIS gaps ≠ intent. Requires analyst review."}
     await db.dark_vessel_scans.insert_one(dict(scan))
     await db.cases.update_one({"id": case_id}, {"$set": {"dark_vessels": {"scan_id": scan["id"], "dark_count": scan["dark_count"], "targets": len(out), "at": now}}})
     await audit("case", case_id, "dark_vessel.scanned", {"dark_count": scan["dark_count"], "targets": len(out), "bright_total": det["total"], "version": DARK_VESSEL_VERSION}, actor)

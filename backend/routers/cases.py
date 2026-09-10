@@ -3,9 +3,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from auth import get_current_user, require_role
-from db import db, clean, audit, to_utc
+from db import db, clean, audit
 from geo import circle_polygon
 from models import CorrelateRequest, ReviewCreate, OverrideRequest, REASON_CODES, new_id
 from jobs import enqueue, process
@@ -46,7 +47,31 @@ async def get_case(case_id: str, user=Depends(get_current_user)):
     spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "raw_input": 0})
     scene = await db.scenes.find_one({"id": case["scene_id"]}, {"_id": 0}) if case.get("scene_id") else None
     versions = await db.correlation_results.find({"case_id": case_id}, {"_id": 0, "version": 1, "created_at": 1, "overall_status": 1, "algorithm_version": 1, "input_hash": 1, "degraded": 1}).sort("version", 1).to_list(100)
-    return clean({**case, "spill_observation": spill, "scene": scene, "result_versions": versions})
+    from sentinel_assets import scene_status_summary
+    return clean({**case, "spill_observation": spill, "scene": scene, "scene_status": scene_status_summary(scene, case), "result_versions": versions})
+
+
+class AttachScene(BaseModel):
+    scene_id: Optional[str] = None
+
+
+@router.post("/cases/{case_id}/attach-scene")
+async def attach_case_scene(case_id: str, body: AttachScene = AttachScene(), user=Depends(require_role("analyst"))):
+    """Attach a registered Sentinel scene (by internal id or STAC id) or auto-find the real Sentinel-1 scene covering the spill."""
+    from sentinel_assets import attach_scene, auto_attach_scene, resolve_scene_assets, SceneAssetError
+    case = await _case(case_id)
+    try:
+        if body.scene_id:
+            scene = await db.scenes.find_one({"$or": [{"id": body.scene_id}, {"provider_scene_id": body.scene_id}]}, {"_id": 0})
+            if not scene:
+                raise HTTPException(404, "scene not found")
+            await attach_scene(case, scene, user["email"])
+        else:
+            scene = await auto_attach_scene(case, user["email"])
+        status = await resolve_scene_assets(scene)
+    except SceneAssetError as e:
+        raise HTTPException(409, str(e))
+    return clean({"case_id": case_id, "scene": scene, "scene_status": status})
 
 
 @router.post("/cases/{case_id}/correlate", status_code=202)

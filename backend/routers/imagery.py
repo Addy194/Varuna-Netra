@@ -53,12 +53,15 @@ async def scene_quicklook(scene_id: str, user=Depends(get_current_user)):
     scene = await db.scenes.find_one({"id": scene_id}, {"_id": 0})
     if not scene:
         raise HTTPException(404, "scene not found")
-    if not (scene.get("metadata") or {}).get("preview_href"):
-        raise HTTPException(404, "scene has no quicklook (manually registered without imagery)")
+    md = scene.get("metadata") or {}
+    if not (md.get("preview_href") or md.get("thumbnail_href") or md.get("stac_collection") or scene.get("quicklook_path")):
+        raise HTTPException(404, "SAR asset missing — scene was registered manually without Sentinel STAC imagery, so no quicklook can be produced")
     try:
         png = await get_quicklook(scene)
+    except ValueError as e:
+        raise HTTPException(502, str(e)[:200])
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"quicklook fetch failed: {str(e)[:200]}")
+        raise HTTPException(502, f"Quicklook generation failed: {str(e)[:200]}")
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
@@ -70,7 +73,7 @@ async def scene_overlay(scene_id: str, user=Depends(get_current_user)):
     md = scene.get("metadata") or {}
     from shapely.geometry import shape
     bbox = md.get("bbox") or list(shape(scene["footprint"]).bounds)
-    return clean({"scene_id": scene_id, "has_quicklook": bool(md.get("preview_href")), "bounds": [[bbox[1], bbox[0]], [bbox[3], bbox[2]]], "bbox": bbox, "footprint": scene["footprint"],
+    return clean({"scene_id": scene_id, "has_quicklook": bool(md.get("preview_href") or md.get("thumbnail_href") or md.get("stac_collection") or scene.get("quicklook_path")), "bounds": [[bbox[1], bbox[0]], [bbox[3], bbox[2]]], "bbox": bbox, "footprint": scene["footprint"],
                   "provider_scene_id": scene["provider_scene_id"], "acquisition_time": scene["acquisition_time"], "detector": scene.get("detector_version"), "detector_summary": scene.get("detector_summary"),
                   "note": "Quicklook stretched to the scene bounding box (EPSG:4326, approximate georeferencing)."})
 
@@ -135,6 +138,6 @@ async def spill_events(offset: int = Query(0, ge=0), limit: int = Query(24, ge=1
     for r in rows:
         sc = scenes.get(r.get("scene_id"))
         r["scene_provider_id"] = sc["provider_scene_id"] if sc else None
-        r["thumb"] = f"/attachments/{r['thumbnail_attachment_id']}/download" if r.get("thumbnail_attachment_id") else (f"/scenes/{r['scene_id']}/quicklook" if sc and ((sc.get("metadata") or {}).get("preview_href")) else None)
+        r["thumb"] = f"/attachments/{r['thumbnail_attachment_id']}/download" if r.get("thumbnail_attachment_id") else (f"/scenes/{r['scene_id']}/quicklook" if sc and ((sc.get("metadata") or {}).get("preview_href") or sc.get("quicklook_path")) else None)
     sources = await db.cases.distinct("source")
     return clean({"total": total, "offset": offset, "limit": limit, "events": rows, "sources": sources})

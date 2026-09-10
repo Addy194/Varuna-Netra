@@ -20,6 +20,7 @@ import { Playbook } from "@/components/case/Playbook";
 import { Precedents } from "@/components/case/Precedents";
 import { Vulnerability } from "@/components/case/Vulnerability";
 import { DarkVessels } from "@/components/case/DarkVessels";
+import { Provenance } from "@/components/case/Provenance";
 import { AssetSearch, assetBounds } from "@/components/map/AssetSearch";
 import { useLive } from "@/context/LiveFeed";
 
@@ -193,8 +194,9 @@ export default function CaseDetail() {
           {tab === "candidates" && (
             <>
               <p className="px-4 pt-3 text-[11px] text-slate-500" data-testid="candidates-disclaimer">{cands?.disclaimer || "Ranked candidates are decision-support output, not a legal determination."}</p>
+              <Provenance caseId={id} />
               <CandidatesTable candidates={cands?.candidates} selected={selected} onSelect={setSelected} />
-              <DarkVessels caseId={id} onScan={setDarkScan} />
+              <DarkVessels caseId={id} onScan={setDarkScan} sceneStatus={c?.scene_status} onAttached={load} />
             </>
           )}
           {tab === "review" && <div className="space-y-4"><DetectorFeedback caseId={id} source={c.source} onSaved={load} /><ReviewForm caseId={id} candidates={cands?.candidates} reasonCodes={config?.reason_codes} resultVersion={cands?.version} onSaved={load} /></div>}

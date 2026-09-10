@@ -34,11 +34,15 @@ async def search_scenes(bbox: list, start: str, end: str, collection: str = "sen
     return {"count": len(d.get("features", [])), "matched": (d.get("context") or {}).get("matched"), "scenes": [_normalize(f) for f in d.get("features", [])], "source": "Microsoft Planetary Computer STAC (open, no key)"}
 
 
-async def get_item(collection: str, stac_id: str) -> dict:
+async def get_item_raw(collection: str, stac_id: str) -> dict:
     async with httpx.AsyncClient(timeout=60) as c:
         r = await c.get(f"{STAC}/collections/{collection}/items/{stac_id}")
         r.raise_for_status()
-        return _normalize(r.json())
+        return r.json()
+
+
+async def get_item(collection: str, stac_id: str) -> dict:
+    return _normalize(await get_item_raw(collection, stac_id))
 
 
 _preview_cache: dict = {}

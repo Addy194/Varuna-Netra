@@ -197,60 +197,21 @@ def test_register_with_detect(analyst_h, search_result):
     assert "mock" in d["detector_note"].lower() or "placeholder" in d["detector_note"].lower()
 
 
-# ---------------- ais/live ----------------
-def test_live_status_default(analyst_h):
+# ---------------- ais/live (canonical: env-only key, settings.ais_coverage) ----------------
+def test_live_status_canonical(analyst_h):
     r = requests.get(f"{API}/ais/live/status", headers=analyst_h, timeout=15)
     assert r.status_code == 200
     d = r.json()
-    assert d["configured"] is False
-    assert d["enabled"] is False
-    assert d["connected"] is False
-    assert d["running"] is True
-    assert isinstance(d.get("bboxes"), list)
+    assert d["source"] == "AISStream" and d["mode"] == "live"
+    assert d["state"] in ("NOT_CONFIGURED", "CONNECTING", "CONNECTED", "LIVE", "RECONNECTING", "OFFLINE")
+    assert "api_key" not in d and "key" not in d
+    assert isinstance(d["coverage_bbox"], list) and all(len(b) == 4 for b in d["coverage_bbox"])
+    assert d["worker_running"] is True
 
 
-def test_live_settings_analyst_forbidden(analyst_h):
-    r = requests.put(f"{API}/ais/live/settings", headers=analyst_h, json={"enabled": False}, timeout=15)
-    assert r.status_code == 403
-
-
-def test_live_settings_bad_bbox_shape(admin_h):
-    r = requests.put(f"{API}/ais/live/settings", headers=admin_h,
-                     json={"bboxes": [[[10, -5, 0], [20, 5]]]}, timeout=15)
-    assert r.status_code == 400
-
-
-def test_live_settings_too_many_bboxes(admin_h):
-    boxes = [[[i, 0], [i + 1, 1]] for i in range(11)]
-    r = requests.put(f"{API}/ais/live/settings", headers=admin_h, json={"bboxes": boxes}, timeout=15)
-    assert r.status_code == 400
-
-
-def test_live_settings_admin_persist_and_recover(admin_h):
-    # enable with fake key
-    r = requests.put(f"{API}/ais/live/settings", headers=admin_h,
-                     json={"api_key": "x", "bboxes": [[[10, -5], [20, 5]]], "enabled": True}, timeout=15)
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["enabled"] is True
-    assert d["bboxes"] == [[[10, -5], [20, 5]]]
-    assert d["configured"] is True
-
-    # backend must remain healthy even after ~15s
-    time.sleep(15)
-    r = requests.get(f"{API}/ais/live/status", headers=admin_h, timeout=15)
-    assert r.status_code == 200
-    d = r.json()
-    # may have an error string from the fake key, but service running
-    assert d["running"] is True
-
-    # restore: disable and clear key
-    r = requests.put(f"{API}/ais/live/settings", headers=admin_h,
-                     json={"api_key": "", "enabled": False}, timeout=15)
-    assert r.status_code == 200
-    d = r.json()
-    assert d["enabled"] is False
-    assert d["configured"] is False
+def test_legacy_live_settings_endpoint_removed(admin_h):
+    r = requests.put(f"{API}/ais/live/settings", headers=admin_h, json={"api_key": "x", "bboxes": [[[10, -5], [20, 5]]]}, timeout=15)
+    assert r.status_code in (404, 405)
 
 
 # ---------------- Regression: seeded roles/data still healthy ----------------

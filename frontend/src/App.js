@@ -18,6 +18,7 @@ import SceneExplorer from "@/pages/SceneExplorer";
 import Events from "@/pages/Events";
 import Archive from "@/pages/Archive";
 import EvidenceVault from "@/pages/EvidenceVault";
+import SystemHealth from "@/pages/SystemHealth";
 import Verify from "@/pages/Verify";
 import { LiveFeedProvider } from "@/context/LiveFeed";
 import { InactivityGuard } from "@/components/InactivityGuard";
@@ -55,9 +56,11 @@ function App() {
               <Route path="/events" element={<Events />} />
               <Route path="/archive" element={<Archive />} />
               <Route path="/archive/:id" element={<EvidenceVault />} />
+              <Route path="/health" element={<SystemHealth />} />
               <Route path="/ingest" element={<Ingest />} />
               <Route path="/jobs" element={<Jobs />} />
               <Route path="/users" element={<Protected role="admin"><Users /></Protected>} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
           </LiveFeedProvider>

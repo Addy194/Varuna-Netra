@@ -91,6 +91,63 @@ async def register(body: RegisterRequest, user=Depends(require_role("analyst")))
     return clean(out)
 
 
+async def _scene_by_any_id(scene_id: str) -> dict:
+    scene = await db.scenes.find_one({"$or": [{"id": scene_id}, {"provider_scene_id": scene_id}]}, {"_id": 0})
+    if not scene:
+        raise HTTPException(404, "Sentinel scene not registered — select it in Scene Explorer first")
+    return scene
+
+
+@router.get("/sentinel/latest")
+async def sentinel_latest(user=Depends(get_current_user)):
+    from sentinel_assets import scene_status_summary
+    scene = await db.scenes.find_one({"metadata.stac_collection": "sentinel-1-grd"}, {"_id": 0}, sort=[("acquisition_time", -1)])
+    if not scene:
+        return {"scene": None, "note": "No Sentinel-1 scene registered yet"}
+    return clean({"scene": scene, "scene_status": scene_status_summary(scene, {"scene_id": scene["id"]}), "note": "Latest registered Sentinel-1 acquisition (near-real-time archive, not a live feed)."})
+
+
+@router.get("/sentinel/search")
+async def sentinel_search_get(bbox: str, start: str, end: str, collection: str = "sentinel-1-grd", limit: int = 25, user=Depends(get_current_user)):
+    try:
+        parts = [float(x) for x in bbox.split(",")]
+        assert len(parts) == 4
+    except (ValueError, AssertionError):
+        raise HTTPException(400, "bbox must be west,south,east,north")
+    return await search(SceneSearch(bbox=parts, start=start, end=end, collection=collection, limit=max(1, min(limit, 100))), user)
+
+
+@router.get("/sentinel/scenes/{scene_id}")
+async def sentinel_scene(scene_id: str, check_access: bool = False, user=Depends(get_current_user)):
+    from sentinel_assets import resolve_scene_assets
+    scene = await _scene_by_any_id(scene_id)
+    st = await resolve_scene_assets(scene, check_access=check_access)
+    return clean({**st, "footprint": scene["footprint"], "status": scene.get("status"), "detector_summary": scene.get("detector_summary")})
+
+
+@router.get("/sentinel/scenes/{scene_id}/assets")
+async def sentinel_scene_assets(scene_id: str, user=Depends(get_current_user)):
+    from sentinel_assets import resolve_scene_assets
+    scene = await _scene_by_any_id(scene_id)
+    st = await resolve_scene_assets(scene, check_access=True)
+    return clean({"scene_id": scene["id"], "provider_scene_id": scene["provider_scene_id"], "collection": st["collection"], "assets": (scene.get("assets") or {}).get("assets", []),
+                  "analysis_asset": st["analysis_asset"], "sar_assets": st["sar_assets"], "sar_asset_accessible": st.get("sar_asset_accessible"), "state": st["state"], "reason": st["reason"],
+                  "signing": "Planetary Computer SAS token resolved server-side just-in-time; signed URLs are never persisted or returned."})
+
+
+@router.get("/sentinel/scenes/{scene_id}/quicklook")
+async def sentinel_scene_quicklook(scene_id: str, user=Depends(get_current_user)):
+    from detector import get_quicklook
+    scene = await _scene_by_any_id(scene_id)
+    try:
+        png = await get_quicklook(scene)
+    except ValueError as e:
+        raise HTTPException(502, str(e)[:200])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Quicklook generation failed: {str(e)[:200]}")
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.get("/satellite/preview")
 async def preview(collection: str, stac_id: str, user=Depends(get_current_user)):
     if collection not in COLLECTIONS:

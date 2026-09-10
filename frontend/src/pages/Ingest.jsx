@@ -20,19 +20,27 @@ const Card = ({ icon: Icon, title, sub, children, testId }) => (
 );
 const err = (e) => { const d = e.response?.data?.detail; toast.error(typeof d === "string" ? d : d?.[0]?.msg || e.message); };
 
-const SAMPLE_FOOTPRINT = JSON.stringify({ type: "Polygon", coordinates: [[[2.0, 52.6], [3.4, 52.6], [3.4, 53.4], [2.0, 53.4], [2.0, 52.6]]] });
-const SAMPLE_SPILL = JSON.stringify({ type: "Polygon", coordinates: [[[3.62, 53.60], [3.69, 53.63], [3.70, 53.62], [3.63, 53.59], [3.62, 53.60]]] });
+const SAMPLE_FOOTPRINT = JSON.stringify({ type: "Polygon", coordinates: [[[71.8, 18.4], [73.2, 18.4], [73.2, 19.6], [71.8, 19.6], [71.8, 18.4]]] });
+const SAMPLE_SPILL = JSON.stringify({ type: "Polygon", coordinates: [[[72.40, 18.90], [72.47, 18.93], [72.48, 18.92], [72.41, 18.89], [72.40, 18.90]]] });
 const SAMPLE_AIS = JSON.stringify({ positions: [
-  { mmsi: "246777888", vessel_name: "DEMO CARRIER", imo: "9123456", vessel_type: "cargo", timestamp: "2026-06-10T02:00:00Z", lat: 53.58, lon: 3.60, sog_kn: 11, cog_deg: 70 },
-  { mmsi: "246777888", vessel_name: "DEMO CARRIER", imo: "9123456", vessel_type: "cargo", timestamp: "2026-06-10T02:20:00Z", lat: 53.60, lon: 3.66, sog_kn: 11, cog_deg: 70 },
-  { mmsi: "246777888", vessel_name: "DEMO CARRIER", imo: "9123456", vessel_type: "cargo", timestamp: "2026-06-10T02:20:00Z", lat: 53.60, lon: 3.66, sog_kn: 11, cog_deg: 70 },
-  { mmsi: "12345", vessel_name: null, timestamp: "2026-06-10T02:30:00", lat: 53.61, lon: 3.70, sog_kn: 75, cog_deg: 70 } ] }, null, 1);
+  { mmsi: "419001234", vessel_name: "EXAMPLE TANKER", imo: "9123456", vessel_type: "tanker", timestamp: "2026-06-10T02:00:00Z", lat: 18.88, lon: 72.38, sog_kn: 11, cog_deg: 70 },
+  { mmsi: "419001234", vessel_name: "EXAMPLE TANKER", imo: "9123456", vessel_type: "tanker", timestamp: "2026-06-10T02:20:00Z", lat: 18.90, lon: 72.44, sog_kn: 11, cog_deg: 70 },
+  { mmsi: "419001234", vessel_name: "EXAMPLE TANKER", imo: "9123456", vessel_type: "tanker", timestamp: "2026-06-10T02:20:00Z", lat: 18.90, lon: 72.44, sog_kn: 11, cog_deg: 70 },
+  { mmsi: "12345", vessel_name: null, timestamp: "2026-06-10T02:30:00", lat: 18.91, lon: 72.48, sog_kn: 75, cog_deg: 70 } ] }, null, 1);
 
 export default function Ingest() {
   const [scenes, setScenes] = useState([]);
   const [vessels, setVessels] = useState([]);
+  const [ais, setAis] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);
   const nav = useNavigate();
-  const load = () => Promise.all([api.get("/scenes"), api.get("/ais/vessels")]).then(([s, v]) => { setScenes(s.data); setVessels(v.data); });
+  const load = () => Promise.all([api.get("/scenes"), api.get("/ais/vessels")]).then(([s, v]) => {
+    setScenes(Array.isArray(s.data) ? s.data : []);
+    const d = v.data || {};
+    setVessels(Array.isArray(d.indexed) ? d.indexed : []);
+    setAis(d);
+    setLoadErr(null);
+  }).catch((e) => { setLoadErr(e.response?.data?.detail || e.message); throw e; });
   useEffect(() => { load().catch(err); }, []);
 
   return (
@@ -56,16 +64,23 @@ export default function Ingest() {
           </table>
         </div>
         <div className="panel overflow-hidden" data-testid="vessels-list">
-          <div className="border-b px-4 py-3 font-display font-semibold" style={{ borderColor: "var(--border-default)" }}>AIS vessels indexed ({vessels.length})</div>
+          <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: "var(--border-default)" }}>
+            <span className="font-display font-semibold">AIS vessels indexed ({vessels.length})</span>
+            {ais && <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400" data-testid="vessels-live-state">{ais.source} · {ais.state} · live active {ais.count}</span>}
+          </div>
+          {loadErr ? <p className="px-4 py-4 text-xs text-rose-300" data-testid="vessels-error">Vessel index unavailable: {String(loadErr)}</p> : (
           <table className="w-full text-xs">
-            <thead><tr className="label-mono text-left">{["MMSI", "Name", "Type", "Fixes", "Last seen", "Flags"].map((h) => <th key={h} className="px-4 py-2 font-normal">{h}</th>)}</tr></thead>
-            <tbody>{vessels.map((v) => (
+            <thead><tr className="label-mono text-left">{["MMSI", "Name", "Type", "Fixes", "Last seen", "Source"].map((h) => <th key={h} className="px-4 py-2 font-normal">{h}</th>)}</tr></thead>
+            <tbody>{vessels.length === 0 ? (
+              <tr><td colSpan={6} className="px-4 py-4 text-slate-500" data-testid="vessels-empty">{ais?.state === "NOT_CONFIGURED" ? "No AIS positions stored. Live AIS is not configured (AISSTREAM_API_KEY missing) — upload CSV/JSON or configure the key." : "No AIS positions stored yet."}</td></tr>
+            ) : vessels.map((v) => (
               <tr key={v.mmsi} data-testid={`vessel-row-${v.mmsi}`} className="border-t" style={{ borderColor: "var(--border-default)" }}>
                 <td className="px-4 py-2 font-mono text-cyan-300"><button data-testid={`vessel-link-${v.mmsi}`} onClick={() => nav(`/vessels/${v.mmsi}`)} className="hover:underline">{v.mmsi}</button></td><td className="px-4 py-2">{v.vessel_name || <span className="text-slate-500">unknown</span>}</td>
                 <td className="px-4 py-2 text-slate-400">{v.vessel_type || "—"}</td><td className="px-4 py-2 font-mono">{v.fixes}</td>
-                <td className="px-4 py-2 font-mono text-slate-400">{fmtTime(v.last_seen)}</td><td className="px-4 py-2 font-mono text-[10px] text-amber-300">{v.quality_flags.join(", ")}</td>
+                <td className="px-4 py-2 font-mono text-slate-400">{fmtTime(v.last_seen)}</td>
+                <td className="px-4 py-2 font-mono text-[10px]"><span className={(v.sources || []).includes("AISStream") ? "text-emerald-300" : "text-slate-400"}>{(v.sources || []).join(", ") || "—"}</span>{(v.quality_flags || []).length > 0 && <span className="ml-1 text-amber-300">{v.quality_flags.join(", ")}</span>}</td>
               </tr>))}</tbody>
-          </table>
+          </table>)}
         </div>
       </div>
     </div>
@@ -75,20 +90,22 @@ export default function Ingest() {
 const SceneRow = ({ s, onDone }) => {
   const [busy, setBusy] = useState(false);
   const nav = useNavigate();
+  const real = !!s.metadata?.stac_collection;
   const detect = async () => {
     setBusy(true);
     try {
       const { data } = await api.post(`/scenes/${s.id}/detect`);
-      toast.success(`Mock detector produced ${data.case.case_number}; correlation queued`);
+      if (!data.case) { toast.info(`Detector found no dark spots in ${s.provider_scene_id}`); onDone(); return; }
+      toast.success(`${real ? "Dark-spot detector" : "Mock detector"} produced ${data.case.case_number}; correlation queued`);
       if (data.job) await pollJob(data.job.id);
       onDone(); nav(`/cases/${data.case.id}`);
     } catch (e) { err(e); } finally { setBusy(false); }
   };
   return (
     <tr data-testid={`scene-row-${s.provider_scene_id}`} className="border-t" style={{ borderColor: "var(--border-default)" }}>
-      <td className="px-4 py-2 text-slate-300">{s.provider}</td><td className="px-4 py-2 font-mono text-[10px] text-cyan-300">{s.provider_scene_id}</td>
+      <td className="px-4 py-2 text-slate-300">{s.provider}{real && <span className="ml-1 rounded px-1 font-mono text-[9px] uppercase text-emerald-300" style={{ border: "1px solid rgba(16,185,129,0.5)" }}>real</span>}</td><td className="px-4 py-2 font-mono text-[10px] text-cyan-300">{s.provider_scene_id}</td>
       <td className="px-4 py-2 font-mono text-slate-400">{fmtTime(s.acquisition_time)}</td><td className="px-4 py-2 font-mono text-[10px] uppercase text-slate-400">{s.status}</td>
-      <td className="px-4 py-2 text-right"><button data-testid={`btn-mock-detect-${s.provider_scene_id}`} disabled={busy} onClick={detect} className="inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-purple-300 hover:bg-purple-400/10 disabled:opacity-50" style={{ borderColor: "rgba(157,78,221,0.5)" }}><Scan size={11} /> {busy ? "Detecting…" : "Mock detect"}</button></td>
+      <td className="px-4 py-2 text-right"><button data-testid={`btn-mock-detect-${s.provider_scene_id}`} disabled={busy} onClick={detect} title={real ? "Experimental dark-spot detector on the real SAR asset" : "No SAR asset — mock placeholder (DEMO mode only)"} className="inline-flex items-center gap-1 rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-purple-300 hover:bg-purple-400/10 disabled:opacity-50" style={{ borderColor: "rgba(157,78,221,0.5)" }}><Scan size={11} /> {busy ? "Detecting…" : real ? "Detect (SAR)" : "Mock detect"}</button></td>
     </tr>
   );
 };

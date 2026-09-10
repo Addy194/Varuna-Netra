@@ -121,13 +121,28 @@ async def get_scene(scene_id: str, user=Depends(get_current_user)):
 
 @router.post("/scenes/{scene_id}/detect", status_code=201)
 async def detect_scene(scene_id: str, correlate: bool = True, user=Depends(require_role("analyst"))):
+    """Real Sentinel STAC scene → experimental dark-spot detector on real SAR. Mock placeholder only when DEMO_MODE and demo data not purged."""
     scene = await db.scenes.find_one({"id": scene_id}, {"_id": 0})
     if not scene:
         raise HTTPException(404, "scene not found")
     scene["acquisition_time"] = to_utc(scene["acquisition_time"])
+    if (scene.get("metadata") or {}).get("stac_collection"):
+        from detector import run_dark_spot_detector
+        try:
+            det = await run_dark_spot_detector(scene, user["email"])
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"Dark-spot detector failed: {str(e)[:200]}")
+        jobs_out = [await enqueue("correlate", {"case_id": c["case_id"], "params": None}, user["email"]) for c in det["cases"]] if correlate else []
+        first = det["cases"][0] if det["cases"] else None
+        case = await db.cases.find_one({"id": first["case_id"]}, {"_id": 0}) if first else None
+        return clean({"detection": det, "case": case, "job": jobs_out[0] if jobs_out else None, "jobs": jobs_out, "detector_note": det["note"]})
+    from livemode import data_mode
+    dm = await data_mode()
+    if dm["mode"] == "LIVE" or dm["demo_purged"]:
+        raise HTTPException(409, "Mock detection is disabled in LIVE mode — register a real Sentinel-1 scene from Scene Explorer and run the dark-spot detector on its SAR asset")
     spill, case = await mock_detect(scene, user["email"])
     job = await enqueue("correlate", {"case_id": case["id"], "params": None}, user["email"]) if correlate else None
-    return clean({"spill_observation": spill, "case": case, "job": job})
+    return clean({"spill_observation": spill, "case": case, "job": job, "detector_note": "Mock detector output — DEMO placeholder"})
 
 
 @router.post("/spill-observations", status_code=201)
@@ -171,17 +186,3 @@ async def query_positions(mmsi: Optional[str] = None, start: Optional[datetime] 
         if end:
             q["timestamp"]["$lte"] = to_utc(end)
     return clean(await db.ais_positions.find(q, {"_id": 0, "location": 0, "dedup_hash": 0}).sort("timestamp", 1).to_list(limit))
-
-
-@router.get("/ais/vessels")
-async def list_vessels(user=Depends(get_current_user)):
-    pipeline = [
-        {"$sort": {"timestamp": -1}},
-        {"$group": {"_id": "$mmsi", "vessel_name": {"$first": "$vessel_name"}, "imo": {"$first": "$imo"}, "vessel_type": {"$first": "$vessel_type"},
-                    "fixes": {"$sum": 1}, "first_seen": {"$min": "$timestamp"}, "last_seen": {"$max": "$timestamp"},
-                    "flags": {"$addToSet": "$quality_flags"}}},
-        {"$sort": {"_id": 1}},
-    ]
-    rows = await db.ais_positions.aggregate(pipeline).to_list(1000)
-    return clean([{"mmsi": r["_id"], "vessel_name": r["vessel_name"], "imo": r["imo"], "vessel_type": r["vessel_type"], "fixes": r["fixes"],
-                   "first_seen": r["first_seen"], "last_seen": r["last_seen"], "quality_flags": sorted({f for fl in r["flags"] for f in fl})} for r in rows])

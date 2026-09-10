@@ -1,4 +1,5 @@
 import io
+import logging
 import math
 from datetime import datetime, timezone
 from typing import Optional
@@ -95,13 +96,21 @@ async def get_quicklook(scene: dict) -> bytes:
         except Exception:  # noqa: BLE001
             pass
     md = scene.get("metadata") or {}
-    png, _ = await fetch_preview(md["preview_href"], md.get("thumbnail_href"))
+    kind = "native"
+    if md.get("preview_href") or md.get("thumbnail_href"):
+        try:
+            png, _ = await fetch_preview(md.get("preview_href") or md["thumbnail_href"], md.get("thumbnail_href"))
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"Quicklook fetch failed from provider preview: {str(e)[:120]}")
+    else:
+        from sentinel_assets import generate_quicklook
+        png, kind = await generate_quicklook(scene), "generated"
     path = f"{APP_NAME}/quicklooks/{scene['provider_scene_id']}.png"
     try:
         res = await put_object(path, png, "image/png")
-        await db.scenes.update_one({"id": scene["id"]}, {"$set": {"quicklook_path": res["path"], "quicklook_bytes": len(png)}})
-    except Exception:  # noqa: BLE001
-        pass
+        await db.scenes.update_one({"id": scene["id"]}, {"$set": {"quicklook_path": res["path"], "quicklook_bytes": len(png), "quicklook_kind": kind, "quicklook_status": "ready"}})
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("detector").warning("quicklook cache store failed for %s: %s", scene["provider_scene_id"], str(e)[:120])
     return png
 
 
@@ -137,8 +146,9 @@ async def run_dark_spot_detector(scene: dict, actor="system") -> dict:
 
 
 async def detect_scene(scene: dict, actor="system") -> dict:
-    """Real quicklook → dark-spot detector; otherwise mock placeholder."""
-    if (scene.get("metadata") or {}).get("preview_href"):
+    """Real Sentinel STAC scene (SAR asset or native preview) → dark-spot detector; manual scenes without imagery → mock placeholder (labelled)."""
+    md = scene.get("metadata") or {}
+    if md.get("preview_href") or md.get("stac_collection"):
         return await run_dark_spot_detector(scene, actor)
     from services import mock_detect
     spill, case = await mock_detect(scene, actor)

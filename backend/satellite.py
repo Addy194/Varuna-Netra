@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 import httpx
 import planetary_computer as pc
@@ -9,6 +10,11 @@ COLLECTIONS = {
     "sentinel-1-rtc": {"label": "Sentinel-1 RTC (calibrated SAR; PC account required)", "provider": "sentinel-1", "kind": "sar", "ml_ready": True},
     "sentinel-2-l2a": {"label": "Sentinel-2 L2A (optical)", "provider": "sentinel-2", "kind": "optical", "ml_ready": False},
 }
+MAX_ASSET_BYTES = int(float(os.getenv("SATELLITE_MAX_ASSET_MB", "64")) * 1024 * 1024)
+
+
+class SatelliteAssetTooLarge(RuntimeError):
+    pass
 
 
 def _normalize(item: dict) -> dict:
@@ -89,9 +95,37 @@ async def fetch_preview(href: str, fallback: str | None = None) -> tuple[bytes, 
     raise last
 
 
-async def fetch_asset(href: str) -> tuple[bytes, str]:
+async def fetch_asset(href: str, max_bytes: int | None = None) -> tuple[bytes, str]:
+    """Fetch a bounded raw asset into memory.
+
+    Full Sentinel SAR products can be hundreds of MB or more. Runtime ML uses
+    rasterio windowed COG reads instead. This helper is intentionally bounded so
+    fallback/utility paths cannot accidentally download a complete swath into RAM.
+    """
+    limit = MAX_ASSET_BYTES if max_bytes is None else max_bytes
     signed_href = await access_href(href)
+    chunks: list[bytes] = []
+    total = 0
     async with httpx.AsyncClient(timeout=180, follow_redirects=True) as c:
-        r = await c.get(signed_href)
-        r.raise_for_status()
-        return r.content, r.headers.get("content-type", "application/octet-stream")
+        async with c.stream("GET", signed_href) as r:
+            r.raise_for_status()
+            content_length = r.headers.get("content-length")
+            if limit and content_length:
+                try:
+                    declared = int(content_length)
+                except ValueError:
+                    declared = 0
+                if declared > limit:
+                    raise SatelliteAssetTooLarge(
+                        f"asset_too_large:{declared} bytes exceeds {limit} byte in-memory limit; "
+                        "use an analysis_bbox/windowed raster read"
+                    )
+            async for chunk in r.aiter_bytes(1024 * 1024):
+                total += len(chunk)
+                if limit and total > limit:
+                    raise SatelliteAssetTooLarge(
+                        f"asset_too_large:download exceeded {limit} byte in-memory limit; "
+                        "use an analysis_bbox/windowed raster read"
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks), r.headers.get("content-type", "application/octet-stream")

@@ -90,7 +90,7 @@ async def verify_hash(hash_value: str):
     h = hash_value.strip().lower()
     rec = await db.prosecution_exports.find_one({"$or": [{"bundle_sha256": h}, {"content_hash": h}]}, {"_id": 0, "files": 0})
     if not rec:
-        return {"verified": False, "status": "unknown_hash", "message": "No prosecution export with this hash is recorded in the SentinelMar audit ledger."}
+        return {"verified": False, "status": "unknown_hash", "message": "No prosecution export with this hash is recorded in the Varuna Netra audit ledger."}
     await db.prosecution_exports.update_one({"id": rec["id"]}, {"$inc": {"verifications": 1}, "$set": {"last_verified_at": datetime.now(timezone.utc)}})
     return clean({"verified": True, "status": "hash_recorded", "matched": "bundle" if rec["bundle_sha256"] == h else "content", "export": rec})
 
@@ -105,7 +105,7 @@ async def verify_upload(file: UploadFile = File(...)):
         z = zipfile.ZipFile(io.BytesIO(data))
         manifest = json.loads(z.read("MANIFEST.json"))
     except Exception:  # noqa: BLE001
-        return {"verified": False, "status": "invalid_bundle", "bundle_sha256": bundle_hash, "message": "Not a SentinelMar bundle (MANIFEST.json missing or unreadable)."}
+        return {"verified": False, "status": "invalid_bundle", "bundle_sha256": bundle_hash, "message": "Not a Varuna Netra bundle (MANIFEST.json missing or unreadable)."}
     file_checks = []
     for name, meta in manifest.get("files", {}).items():
         try:

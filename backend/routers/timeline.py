@@ -108,7 +108,7 @@ ul{{list-style:none;padding:0;margin:24px 0 0;border-left:1px solid #334155}}li{
 .title{{font-size:14px;font-weight:600}}.kind{{font-family:Consolas,monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#94A3B8;margin-right:8px}}.who{{font-size:11px;color:#00F0FF;font-weight:normal;margin-left:6px}}
 .detail{{font-size:12px;color:#94A3B8;margin-top:3px;line-height:1.5}}.atts{{border:0;margin-top:6px}}.atts li{{display:block;padding:4px 0;font-size:12px}}.disc{{font-size:11px;color:#64748B;border-top:1px solid #1E293B;margin-top:28px;padding-top:12px}}.share{{font-size:11px;color:#FFB703}}
 @media print{{body{{background:#fff;color:#111}}.card{{background:#f3f4f6;border-color:#ddd}}.detail,.mono,.card b{{color:#555}}ul{{border-color:#999}}.dot{{box-shadow:0 0 0 3px #fff}}}}</style></head><body><div class=wrap>
-<div class=mono>SentinelMar · case timeline · generated {tl['generated_at'].strftime('%Y-%m-%d %H:%MZ')}</div>
+<div class=mono>Varuna Netra · case timeline · generated {tl['generated_at'].strftime('%Y-%m-%d %H:%MZ')}</div>
 <h1>{e(case['case_number'])}</h1><span class=status>{e(case['attribution_status'].replace('_', ' '))}</span> {share_note}
 <div class=card><div><b>Acquired (UTC)</b>{case['acquisition_time'].strftime('%Y-%m-%d %H:%MZ')}</div><div><b>Source</b>{e(spill['source'])}</div><div><b>Detection confidence</b>{spill['detection_confidence']:.2f}</div><div><b>Area</b>{spill['estimated_area_km2']} km²</div>
 <div><b>Primary jurisdiction</b>{e(pj.get('code') or 'unassigned')}</div><div><b>Authority</b>{e(pj.get('authority') or '—')}</div><div><b>Review state</b>{e(case['review_state'])}</div><div><b>Confirmed vessel</b>{e(case.get('confirmed_vessel_mmsi') or '—')}</div></div>

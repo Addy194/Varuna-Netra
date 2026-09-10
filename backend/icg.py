@@ -47,7 +47,7 @@ async def seed_icg() -> int:
         return 0
     now = datetime.now(timezone.utc)
     docs = [{"id": new_id(), "code": code, "name": name, "region_code": reg, "region": REGIONS[reg]["name"], "region_hq": REGIONS[reg]["hq"], "district_hq": hq,
-             "geometry": _box(*box), "approximate": True, "note": APPROX_NOTE, "source": f"SentinelMar seed {ICG_VERSION}", "active": True, "created_at": now, "updated_at": now}
+             "geometry": _box(*box), "approximate": True, "note": APPROX_NOTE, "source": f"Varuna Netra seed {ICG_VERSION}", "active": True, "created_at": now, "updated_at": now}
             for code, name, reg, hq, box in DISTRICTS]
     await db.icg_districts.insert_many(docs)
     return len(docs)

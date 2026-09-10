@@ -122,7 +122,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     link = f"{os.environ['FRONTEND_URL'].rstrip('/')}/reset-password?token={token}"
-    sent_res = await send_email(email, "SentinelMar password reset", reset_email_html(user.get("name") or email, link))
+    sent_res = await send_email(email, "Varuna Netra password reset", reset_email_html(user.get("name") or email, link))
     sent = sent_res["sent"]
     delivery = "email" if sent else "logged"
     await db.password_reset_tokens.insert_one({
@@ -188,7 +188,7 @@ async def put_email_settings(body: EmailSettings, user=Depends(require_role("adm
 
 @router.post("/settings/email/test")
 async def test_email_settings(user=Depends(require_role("admin"))):
-    res = await send_email(user["email"], "SentinelMar delivery test", test_email_html(user.get("name") or user["email"]))
+    res = await send_email(user["email"], "Varuna Netra delivery test", test_email_html(user.get("name") or user["email"]))
     await record_test(res, user["email"])
     await audit("settings", "email", "settings.email_tested", res, user["email"])
     if not res["sent"]:

@@ -99,7 +99,7 @@ def _wind(v, label="m/s"):
 
 def _sec_header(d, bundle, case):
     return [Paragraph(f"Evidence Package — {case['case_number']}", d.h1),
-            Paragraph(f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}Z by SentinelMar · {bundle.get('generated_by', 'system')}", d.small),
+            Paragraph(f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}Z by Varuna Netra · {bundle.get('generated_by', 'system')}", d.small),
             Paragraph(f"<b>Disclaimer.</b> {bundle['disclaimer']}", d.small), Spacer(1, 6)]
 
 
@@ -289,5 +289,5 @@ def build_pdf(bundle: dict) -> bytes:
         el += _sec_vulnerability(d, bundle["vulnerability"], case)
     buf = io.BytesIO()
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=14 * mm, bottomMargin=14 * mm,
-                      title=f"Evidence package {case['case_number']}", author="SentinelMar").build(el)
+                      title=f"Evidence package {case['case_number']}", author="Varuna Netra").build(el)
     return buf.getvalue()

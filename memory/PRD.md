@@ -1,4 +1,4 @@
-# SentinelMar — Maritime Oil-Spill Detection & Vessel Correlation (PRD)
+# Varuna Netra (formerly SentinelMar) — Maritime Oil-Spill Detection & Vessel Correlation (PRD)
 
 ## Original problem statement
 Web-based decision-support system for maritime authorities that ingests satellite-derived spill observations and AIS tracks, detects spatial-temporal overlap, and produces auditable ranked vessel candidates — not legal conclusions. Provider-neutral ingestion (Sentinel-1 first), normalized spill/AIS schemas, configurable corridor/time-window correlation, drift-back uncertainty (wind/current or degraded), transparent scoring (spatial, time gap, track continuity, heading, drift plausibility, AIS reliability), evidence bundles, GeoJSON, confidence bands, processing logs, analyst review states, alerts, immutable decisions. Statuses: possible / probable / insufficient_evidence / analyst_confirmed / indeterminate. Reproducible, auditable results.
@@ -117,6 +117,9 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - Verified byte-identical with `scripts/refactor_baseline.py` (capture before / compare after): 60 playbooks + 6 PDF texts IDENTICAL; correlation golden 9/9.
 - `CaseMap.jsx` render split into `DarkVesselLayer`, `DriftLayers`, `VesselTracks`, `ClosestFixes`; static pathOptions hoisted in `EvidenceVault.jsx`/`Vulnerability.jsx`.
 - Report items re-confirmed as false positives: `tests/test_iteration3.py` secret (already env-based), `is` literal comparisons (all `is None`), `random` (deterministic seeded mock), lazy imports (own modules), hook deps (eslint react-hooks clean).
+
+## Implemented (iteration 16 — rebrand)
+- Product renamed **SentinelMar → Varuna Netra** everywhere user-facing: header/login logo, browser title, API title, PDF author/footer, email subjects, timeline share footer, verify page, prosecution messages, OSM User-Agent, ICG seed source. Internal identifiers intentionally kept: demo emails `@sentinelmar.demo`, `APP_NAME` storage prefix, `sentinelmar:unauthorized` DOM event, test file names.
 
 ## Backlog (prioritized)
 - P1: Resend + aisstream keys; U-Net SAR segmentation; OpenDrift forward drift; socio-economic vulnerability (Overpass POIs); WhatsApp citizen reports; i18n (Hindi/Tamil/Marathi); outbound port-authority webhooks (HMAC); ErrorBoundary around CaseDetail; exponential lockout backoff.

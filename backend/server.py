@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     client.close()
 
 
-app = FastAPI(title="SentinelMar — Oil-Spill Detection & Vessel Correlation", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Varuna Netra — Oil-Spill Detection & Vessel Correlation", version="0.1.0", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 

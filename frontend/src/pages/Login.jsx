@@ -39,7 +39,7 @@ export default function Login() {
       <div className="hidden lg:flex flex-col justify-between p-12 grid-bg border-r" style={{ borderColor: "var(--border-default)" }}>
         <div className="flex items-center gap-2.5">
           <span className="grid h-9 w-9 place-items-center rounded-md" style={{ background: "rgba(0,240,255,0.12)", border: "1px solid rgba(0,240,255,0.4)" }}><Radar size={18} color="#00F0FF" /></span>
-          <span className="font-display text-xl font-bold tracking-tight">Sentinel<span style={{ color: "#00F0FF" }}>Mar</span></span>
+          <span className="font-display text-xl font-bold tracking-tight">Varuna <span style={{ color: "#00F0FF" }}>Netra</span></span>
         </div>
         <div className="max-w-lg fade-up">
           <p className="label-mono mb-3">Authority console · restricted</p>

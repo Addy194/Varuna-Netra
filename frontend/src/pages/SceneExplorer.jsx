@@ -139,7 +139,7 @@ export default function SceneExplorer() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4" data-testid="explorer-results">
-          {!res && <p className="text-xs text-slate-500">Pan/zoom anywhere on Earth (or pick a preset), set dates, then search. Found scenes can be registered as SentinelMar scenes; "Register + detect" runs the <span className="text-rose-300">⚠ experimental dark-spot detector</span> (Otsu thresholding on the SAR quicklook — low-wind areas and wakes cause false positives; every result is flagged low-confidence for analyst review).</p>}
+          {!res && <p className="text-xs text-slate-500">Pan/zoom anywhere on Earth (or pick a preset), set dates, then search. Found scenes can be registered as Varuna Netra scenes; "Register + detect" runs the <span className="text-rose-300">⚠ experimental dark-spot detector</span> (Otsu thresholding on the SAR quicklook — low-wind areas and wakes cause false positives; every result is flagged low-confidence for analyst review).</p>}
           {res && <p className="mb-2 font-mono text-[10px] text-slate-400" data-testid="explorer-count">{res.count} scenes{res.matched ? ` of ${res.matched} matched` : ""} · {res.source}</p>}
           <div className="space-y-2">
             {res?.scenes.map((s) => (

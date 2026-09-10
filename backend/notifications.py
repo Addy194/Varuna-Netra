@@ -51,7 +51,7 @@ async def notify_alert(alert: dict, case: dict) -> dict:
     cfg = await get_config()
     now = datetime.now(timezone.utc)
     to = await recipients_for_alerts(((case.get("icg") or alert.get("icg")) or {}).get("code"))
-    subject = f"[SentinelMar] {alert['severity'].upper()} alert — {case['case_number']}" + (f" · {case['icg']['code']}" if case.get("icg") else "")
+    subject = f"[Varuna Netra] {alert['severity'].upper()} alert — {case['case_number']}" + (f" · {case['icg']['code']}" if case.get("icg") else "")
     if not cfg["api_key"] or not cfg["enabled"] or not cfg.get("alerts_enabled", True):
         summary = {"status": "not_configured", "recipients": to, "sent": 0, "failed": 0, "at": now, "reason": "email delivery not configured or alert emails disabled"}
     elif not to:

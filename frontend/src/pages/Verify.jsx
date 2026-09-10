@@ -15,9 +15,9 @@ export default function Verify() {
   return (
     <div className="min-h-screen px-6 py-12" style={{ background: "var(--bg-primary, #0A0E17)", color: "#F8FAFC" }} data-testid="verify-page">
       <div className="mx-auto max-w-2xl">
-        <p className="label-mono mb-1">SentinelMar · evidence integrity verification</p>
+        <p className="label-mono mb-1">Varuna Netra · evidence integrity verification</p>
         <h1 className="font-display text-4xl font-extrabold tracking-tight">Verify a prosecution bundle</h1>
-        <p className="mt-2 text-sm text-slate-400">Regulators and courts can confirm that an exported evidence bundle is byte-identical to what the supervising officer exported. Upload the ZIP (every file is re-hashed with SHA-256 and compared to its MANIFEST and to the SentinelMar ledger) or paste the bundle hash.</p>
+        <p className="mt-2 text-sm text-slate-400">Regulators and courts can confirm that an exported evidence bundle is byte-identical to what the supervising officer exported. Upload the ZIP (every file is re-hashed with SHA-256 and compared to its MANIFEST and to the Varuna Netra ledger) or paste the bundle hash.</p>
         <label className="mt-6 flex cursor-pointer flex-col items-center gap-2 rounded border-2 border-dashed p-8 text-sm text-slate-300 hover:border-cyan-400/60" style={{ borderColor: "var(--border-highlight, #334155)" }} data-testid="verify-dropzone" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); byFile(e.dataTransfer.files?.[0]); }}>
           <Upload size={22} color="#00F0FF" /> Drop the bundle ZIP here or click to choose
           <input data-testid="verify-file-input" type="file" accept=".zip" className="hidden" onChange={(e) => byFile(e.target.files?.[0])} />

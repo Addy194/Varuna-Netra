@@ -38,7 +38,7 @@ export const Layout = () => {
           <span className="grid h-8 w-8 place-items-center rounded-md" style={{ background: "rgba(0,240,255,0.12)", border: "1px solid rgba(0,240,255,0.4)" }}>
             <Radar size={16} color="#00F0FF" />
           </span>
-          <span className="font-display text-lg font-bold tracking-tight">Sentinel<span style={{ color: "#00F0FF" }}>Mar</span></span>
+          <span className="whitespace-nowrap font-display text-lg font-bold tracking-tight">Varuna <span style={{ color: "#00F0FF" }}>Netra</span></span>
         </NavLink>
         <nav className="flex items-center gap-1">
           {links.map(({ to, label, icon: Icon, id }) => (

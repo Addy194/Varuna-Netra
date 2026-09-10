@@ -9,14 +9,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     environment:
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: varunanetra
+      MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
+      DB_NAME: ${DB_NAME:-varunanetra}
+      DEMO_MODE: ${DEMO_MODE:-false}
       JWT_SECRET: ${JWT_SECRET:-demo-only-change-me}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@varunanetra.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-demo-admin-password}
@@ -31,25 +33,41 @@ services:
       EMAIL_MODE: ${EMAIL_MODE:-demo}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SENDER_EMAIL: ${SENDER_EMAIL:-}
-      STORAGE_MODE: local
-      LOCAL_STORAGE_DIR: /data/storage
+      STORAGE_MODE: ${STORAGE_MODE:-local}
+      LOCAL_STORAGE_DIR: ${LOCAL_STORAGE_DIR:-/data/storage}
       JOB_WORKERS: ${JOB_WORKERS:-2}
       JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
       JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-900}
+      PC_SDK_SUBSCRIPTION_KEY: ${PC_SDK_SUBSCRIPTION_KEY:-}
     depends_on:
       mongo:
         condition: service_healthy
     volumes: ["local_storage:/data/storage"]
     ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/', timeout=5).read()"]
+      interval: 10s
+      timeout: 7s
+      retries: 12
+      start_period: 15s
+
   frontend:
     build:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        REACT_APP_BACKEND_URL: http://localhost:8000
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://localhost:8000}
     restart: unless-stopped
-    depends_on: [backend]
+    depends_on:
+      backend:
+        condition: service_healthy
     ports: ["3000:80"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   mongo_data:
   local_storage:

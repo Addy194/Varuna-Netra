@@ -66,6 +66,7 @@ def runtime_status() -> dict[str, Any]:
         "checkpoint_exists": exists,
         "pytorch_available": torch_available,
         "available": available,
+        "loaded": _MODEL is not None,
         "reason": reason,
     }
 
@@ -104,6 +105,17 @@ def _load_model():
         if MODE == "force":
             raise
         raise SegmentationUnavailable(_LOAD_ERROR) from exc
+
+
+def warmup() -> dict[str, Any]:
+    """Validate and load v2 at service startup when it is configured and available."""
+    status = runtime_status()
+    if not status["available"]:
+        if MODE == "force":
+            raise SegmentationUnavailable(status["reason"] or "segmentation runtime unavailable")
+        return status
+    _load_model()
+    return runtime_status()
 
 
 def model_info() -> dict[str, Any]:

@@ -39,9 +39,11 @@ def test_ais_status(analyst_token):
     d = r.json()
     assert d["source"] == "AISStream"
     assert d["mode"] == "live"
-    assert d["connected"] is False
-    assert d["reason"] == "API key not configured"
-    assert "Satellite analysis still operational" in (d.get("note") or "")
+    if not d["configured"]:
+        assert d["connected"] is False and d["reason"] == "API key not configured"
+        assert "Satellite analysis still operational" in (d.get("note") or "")
+    else:
+        assert d["state"] != "NOT_CONFIGURED"
     # canonical coverage format: [S, W, N, E] per bbox (aisstream_bounding_boxes carries the [[lat,lon],[lat,lon]] form)
     bbs = d["coverage_bbox"]
     assert bbs, "coverage_bbox empty"

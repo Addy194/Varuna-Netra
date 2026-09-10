@@ -6,6 +6,7 @@ import { Satellite, Search, Scan, Globe2, Image as ImageIcon, MapPin, Flame } fr
 import { api, apiError, fmtTime } from "@/lib/api";
 import { GibsLayer } from "@/components/map/GibsLayer";
 import { DensityLayer } from "@/components/map/DensityLayer";
+import { LiveVesselLayer, useLiveVessels } from "@/components/map/LiveVesselLayer";
 import { SceneWatches } from "@/components/explorer/SceneWatches";
 import { AssetSearch } from "@/components/map/AssetSearch";
 import { TILE_PERF, OSM_URL } from "@/components/map/tiles";
@@ -56,6 +57,7 @@ export default function SceneExplorer() {
   const [gibsDate, setGibsDate] = useState(iso(new Date(Date.now() - 86400e3)));
   const [density, setDensity] = useState(null);
   const [densityHours, setDensityHours] = useState(0);
+  const { data: liveAis } = useLiveVessels();
   const [zoom, setZoom] = useState(3);
   const [asset, setAsset] = useState(null);
 
@@ -94,6 +96,7 @@ export default function SceneExplorer() {
           <TileLayer url={OSM_URL} attribution="&copy; OpenStreetMap contributors" className="dark-tiles" {...TILE_PERF} />
           {basemap && meta && <GibsLayer layer={meta.basemaps.find((b) => b.id === basemap)} date={gibsDate} template={meta.gibs_template} />}
           {density && <DensityLayer cells={density.cells} />}
+          <LiveVesselLayer vessels={liveAis?.vessels} />
           {asset?.geometry && <GeoJSON key={`asset-${asset.id}`} data={asset.geometry} style={{ color: "#FFB703", weight: 2, dashArray: "8,4", fillColor: "#FFB703", fillOpacity: 0.06 }} onEachFeature={(ft, l) => l.bindTooltip(`${asset.name} · ${asset.type}`, { permanent: true, direction: "top" })} />}
           <ViewTracker onView={setView} onZoom={setZoom} /><FlyTo bbox={flyTo} />
           {footprints && <GeoJSON key={res.scenes.map((s) => s.stac_id).join("|") + hover} data={footprints}
@@ -120,6 +123,7 @@ export default function SceneExplorer() {
             <option value={0}>off</option><option value={24}>last 24 h</option><option value={168}>last 7 days</option><option value={2160}>last 90 days</option>
           </select>
           {density && <div className="mt-1 font-mono text-[10px] text-slate-400" data-testid="density-summary">{density.cells.length} bins · max {density.max} fixes/bin · {density.resolution_deg}° grid</div>}
+          <div className="mt-1 font-mono text-[10px]" data-testid="live-vessels-summary" style={{ color: liveAis?.state === "LIVE" ? "#10B981" : "#94A3B8" }}>● live AIS ({liveAis?.source || "AISStream"}) · {liveAis?.state || "…"} · {liveAis?.count ?? 0} vessel(s) on map</div>
         </div>
         </div>
       </div>

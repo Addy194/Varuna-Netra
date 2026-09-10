@@ -41,7 +41,7 @@ export default function Ingest() {
     setAis(d);
     setLoadErr(null);
   }).catch((e) => { setLoadErr(e.response?.data?.detail || e.message); throw e; });
-  useEffect(() => { load().catch(err); }, []);
+  useEffect(() => { load().catch(err); const t = setInterval(() => load().catch(() => {}), 20000); return () => clearInterval(t); }, []);
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -50,6 +50,22 @@ export default function Ingest() {
         <h1 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">Ingestion</h1>
       </div>
       <div className="mb-4"><LiveAis onChanged={load} /></div>
+      {ais?.vessels?.length > 0 && (
+        <div className="panel mb-4 overflow-hidden" data-testid="live-vessels-list">
+          <div className="border-b px-4 py-3 font-display font-semibold" style={{ borderColor: "var(--border-default)" }}>Live vessels · AISStream · {ais.count} active (stale after {ais.stale_after_min} min)</div>
+          <table className="w-full text-xs">
+            <thead><tr className="label-mono text-left">{["MMSI", "Name", "Lat", "Lon", "SOG kn", "COG°", "Hdg°", "Source time", "Received"].map((h) => <th key={h} className="px-4 py-2 font-normal">{h}</th>)}</tr></thead>
+            <tbody>{ais.vessels.slice(0, 50).map((v) => (
+              <tr key={v.mmsi} data-testid={`live-vessel-row-${v.mmsi}`} className="border-t" style={{ borderColor: "var(--border-default)" }}>
+                <td className="px-4 py-2 font-mono text-emerald-300"><button data-testid={`live-vessel-link-${v.mmsi}`} onClick={() => nav(`/vessels/${v.mmsi}`)} className="hover:underline">{v.mmsi}</button></td>
+                <td className="px-4 py-2">{v.ship_name || <span className="text-slate-500">unknown</span>}</td>
+                <td className="px-4 py-2 font-mono">{v.lat.toFixed(4)}</td><td className="px-4 py-2 font-mono">{v.lon.toFixed(4)}</td>
+                <td className="px-4 py-2 font-mono">{v.sog ?? "—"}</td><td className="px-4 py-2 font-mono">{v.cog ?? "—"}</td><td className="px-4 py-2 font-mono">{v.heading ?? "—"}</td>
+                <td className="px-4 py-2 font-mono text-slate-400">{fmtTime(v.timestamp)}</td><td className="px-4 py-2 font-mono text-slate-400">{fmtTime(v.received_at)}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      )}
       <div className="grid gap-4 xl:grid-cols-3">
         <SceneForm onDone={load} />
         <SpillForm scenes={scenes} onDone={(caseId) => { load(); if (caseId) nav(`/cases/${caseId}`); }} />

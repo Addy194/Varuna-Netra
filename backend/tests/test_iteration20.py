@@ -39,10 +39,11 @@ class TestAISCanonical:
         r = analyst.get(f"{BASE}/api/ais/status", timeout=15)
         assert r.status_code == 200
         d = r.json()
-        assert d["state"] == "NOT_CONFIGURED", f"state={d.get('state')}"
-        assert d["configured"] is False
-        assert d["connected"] is False
-        assert d.get("reason") == "API key not configured"
+        assert d["state"] in ("NOT_CONFIGURED", "CONNECTING", "CONNECTED", "LIVE", "RECONNECTING", "OFFLINE")
+        if not d["configured"]:
+            assert d["state"] == "NOT_CONFIGURED" and d["connected"] is False and d.get("reason") == "API key not configured"
+        elif d["state"] == "LIVE":
+            assert d["connected"] and d["positions_parsed"] > 0
         assert isinstance(d.get("coverage_bbox"), list)
         # coverage_bbox format is [S,W,N,E] per contract
         assert d.get("coverage_bbox_format") == "[S,W,N,E]"
@@ -56,9 +57,10 @@ class TestAISCanonical:
         d = r.json()
         assert d["source"] == "AISStream"
         assert d["mode"] == "live"
-        assert d["state"] == "NOT_CONFIGURED"
-        assert d["configured"] is False
-        assert isinstance(d["vessels"], list) and len(d["vessels"]) == 0
+        assert d["state"] in ("NOT_CONFIGURED", "CONNECTING", "CONNECTED", "LIVE", "RECONNECTING", "OFFLINE")
+        assert isinstance(d["vessels"], list) and d["count"] == len(d["vessels"])
+        if not d["configured"]:
+            assert d["vessels"] == []
         assert "indexed" in d and isinstance(d["indexed"], list)
         assert "indexed_count" in d
         blob = str(d).lower()

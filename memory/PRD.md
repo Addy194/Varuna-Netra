@@ -144,7 +144,13 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - Frontend: DarkVessels panel shows GREEN/YELLOW/RED SAR state chip, "Find & attach Sentinel-1 scene" button, specific error text, no-AIS warning; Ingest samples moved from North Sea to Mumbai offshore; `/scenes/{id}/detect` runs the real detector for STAC scenes and returns 409 for mock in LIVE mode (button reads "Detect (SAR)"); unknown routes redirect to `/`.
 - Test hygiene: `tests/conftest.py` auto-skips tests whose function/class/fixture source references the purged demo dataset and the legacy pre-auth suite; obsolete `/ais/live/settings` tests replaced (that test wrote the `[[10,-5],[20,5]]` box); restart test opt-in (`ALLOW_BACKEND_RESTART_TEST=1`); `ais_live.stop()` on lifespan shutdown. Purge also removes `TEST_*` scenes and `mock_detector` spills. Full suite: 191 passed / 111 skipped / 0 failed (last run). Frontend `yarn build` OK, ESLint 0 errors.
 - Indexes added: `scenes.acquisition_time`, `cases.scene_id`, `dark_vessel_scans(case_id, created_at)`.
-- STILL BLOCKED: live AIS — `AISSTREAM_API_KEY` absent in backend env (state NOT_CONFIGURED). Resend email unconfigured.
+- STILL BLOCKED: Resend email unconfigured.
+
+## Implemented (iteration 21 — REAL AISStream verified LIVE, 2026-09-10 20:32Z)
+- `AISSTREAM_API_KEY` added to `/app/backend/.env` only (untracked; never in Git/frontend/logs/API). Backend restarted → `AISStream API key configured: True` → `aisstream websocket open, subscription sent for 4 bbox(es)` → SubscriptionConfirmation → genuine PositionReports parsed/stored (`ais_positions.source="AISStream"`, e.g. MMSI 419001351 APJ KABIR ANAND 13.2593N 80.3392E 2026-09-10T20:33:08Z; 566952000 APL SAVANNAH; 563182400 WAN HAI 359 — Chennai/Ennore anchorage) → `/api/ais/status` state=LIVE (~2–3 msg/min across the 4 Indian boxes) → `/api/ais/vessels.vessels[]` → Ingestion "Live vessels" table + LiveAis badge "LIVE AIS · n msg/min" → Data Sources AIS card LIVE → Scene Explorer live vessel markers (`components/map/LiveVesselLayer.jsx`, polls every 15 s, tooltip MMSI/name/pos/SOG/COG).
+- LIVE state now requires ≥1 genuine parsed position within 5 min (`connection_state`); CONNECTED = socket+subscription but no data yet.
+- Tests made state-aware (pass with or without a key). Note: in-memory counters reset on backend reload; Mongo history persists.
+- PRODUCTION: user must add the same `AISSTREAM_API_KEY` in the Emergent deployment backend env and redeploy.
 
 ## Data truthfulness matrix
 - REAL: Sentinel-1 GRD scenes/assets (Planetary Computer STAC), AISStream when `state=LIVE`.

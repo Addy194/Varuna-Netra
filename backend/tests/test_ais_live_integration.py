@@ -59,12 +59,15 @@ def test_status_default(supervisor):
     assert r.status_code == 200, r.text
     js = r.json()
     assert js["mode"] == "live"
-    assert js["configured"] is False
-    assert js["connected"] is False
-    assert js["subscription_confirmed"] is False
-    assert js["reason"] == "API key not configured"
-    assert js["vessels_active"] == 0
-    assert js["coverage_mode"] == "default"
+    if js["configured"]:
+        # genuine key present: LIVE requires real parsed positions; CONNECTED/CONNECTING otherwise
+        assert js["state"] in ("CONNECTING", "CONNECTED", "LIVE", "RECONNECTING", "OFFLINE")
+        if js["state"] == "LIVE":
+            assert js["connected"] and js["subscription_confirmed"] and js["positions_parsed"] > 0 and js["last_message_at"]
+    else:
+        assert js["state"] == "NOT_CONFIGURED" and js["connected"] is False and js["subscription_confirmed"] is False
+        assert js["reason"] == "API key not configured" and js["vessels_active"] == 0
+    assert js["coverage_mode"] in ("default", "spill", "manual")
     assert len(js["coverage_bbox"]) == 4
     for s, w, n, e in js["coverage_bbox"]:
         assert 5 <= s < n <= 25, f"lat range {s},{n}"
@@ -147,8 +150,11 @@ def test_vessels_empty(analyst):
     r = requests.get(f"{BASE}/api/ais/vessels", headers=analyst, timeout=15)
     assert r.status_code == 200
     js = r.json()
-    assert js["count"] == 0
-    assert js["vessels"] == []
+    assert js["count"] == len(js["vessels"])
+    for v in js["vessels"]:
+        assert v["mmsi"].isdigit() and -90 <= v["lat"] <= 90 and -180 <= v["lon"] <= 180 and v["timestamp"]
+    if not js["configured"]:
+        assert js["vessels"] == []
 
 
 def test_tracks_empty(analyst):
@@ -163,9 +169,10 @@ def test_test_connection_admin(admin):
     r = requests.post(f"{BASE}/api/ais/test-connection", headers=admin, timeout=20)
     assert r.status_code == 200
     js = r.json()
-    assert js["configured"] is False
-    assert js["websocket"] is False
-    assert js["error"] == "API key not configured"
+    if js["configured"]:
+        assert js["websocket"] is True and js["subscription"] is True
+    else:
+        assert js["websocket"] is False and js["error"] == "API key not configured"
 
 
 def test_test_connection_analyst_forbidden(analyst):

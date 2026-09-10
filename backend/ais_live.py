@@ -232,8 +232,8 @@ def connection_state() -> str:
         return "NOT_CONFIGURED"
     now = datetime.now(timezone.utc)
     if state["connected"] and state["subscription_confirmed"]:
-        recent = state["last_message_at"] and (now - state["last_message_at"]).total_seconds() < 120
-        return "LIVE" if recent else "CONNECTED"
+        recent = state["last_position_at"] and (now - state["last_position_at"]).total_seconds() < 300
+        return "LIVE" if (recent and state["positions"] > 0) else "CONNECTED"
     if state["error"] and state["error"] != "API key not configured":
         return "RECONNECTING" if state["reconnects"] and state["last_disconnect_at"] and (now - state["last_disconnect_at"]).total_seconds() < 120 else "OFFLINE"
     return "CONNECTING" if (_task and not _task.done()) else "OFFLINE"

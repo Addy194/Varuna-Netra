@@ -25,6 +25,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("varunanetra")
 
 
+def demo_mode_enabled() -> bool:
+    return os.environ.get("DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await ensure_indexes()
@@ -42,29 +46,39 @@ async def lifespan(app: FastAPI):
             logger.info("object storage initialised")
         except Exception as e:  # noqa: BLE001
             logger.error("object storage init failed: %s", e)
-    try:
-        res = await seed_demo()
-        logger.info("seed: %s", res)
-        if zones_added:
-            for c in await db.cases.find({"primary_jurisdiction": {"$exists": False}}, {"id": 1}).to_list(1000):
-                await apply_to_case(c["id"], "system")
-    except Exception:
-        logger.exception("seed failed")
+    if demo_mode_enabled():
+        try:
+            res = await seed_demo()
+            logger.warning("DEMO_MODE enabled; seed: %s", res)
+            if zones_added:
+                for c in await db.cases.find({"primary_jurisdiction": {"$exists": False}}, {"id": 1}).to_list(1000):
+                    await apply_to_case(c["id"], "system")
+        except Exception:
+            logger.exception("demo seed failed")
+    else:
+        logger.info("DEMO_MODE disabled; using live/real data sources only")
     yield
     client.close()
 
 
-app = FastAPI(title="VarunaNetra — Oil-Spill Detection & Vessel Correlation", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="VarunaNetra — Oil-Spill Detection & Vessel Correlation", version="0.2.0", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 
 @api.get("/")
 async def root():
-    return {"service": "varunanetra", "algorithm_version": ALGORITHM_VERSION, "status": "ok"}
+    return {
+        "service": "varunanetra",
+        "algorithm_version": ALGORITHM_VERSION,
+        "status": "ok",
+        "mode": "demo" if demo_mode_enabled() else "real-data",
+    }
 
 
 @api.post("/seed")
 async def reseed(user=Depends(require_role("admin"))):
+    if not demo_mode_enabled():
+        return {"status": "disabled", "message": "Demo seeding is disabled in real-data mode."}
     return await seed_demo()
 
 
@@ -80,7 +94,7 @@ api.include_router(scene_watch_router.router)
 api.include_router(imagery.router)
 api.include_router(live.router)
 api.include_router(icg_router.router)
-api.include_router(vulnerability_router.router)
+api.include_router(vulnerability_router)
 api.include_router(dark_vessel_router.router)
 api.include_router(gazetteer.router)
 api.include_router(archive.router)

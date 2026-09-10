@@ -7,6 +7,7 @@ threshold tuning if these numbers are presented as independent test metrics.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -28,6 +29,14 @@ def parse_args():
     p.add_argument("--overlap", type=int, default=64)
     p.add_argument("--output", default="checkpoints/sar_spill_seg_v2_test_metrics.json")
     return p.parse_args()
+
+
+def sha256_file(path: str | Path) -> str:
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def build_scenes(args):
@@ -84,10 +93,18 @@ def finish(counts):
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = torch.load(args.checkpoint, map_location="cpu")
+    checkpoint_path = Path(args.checkpoint)
+    checkpoint_hash = sha256_file(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if checkpoint.get("model_id") != "sar_spill_seg_v2":
+        raise ValueError(f"Unexpected model_id: {checkpoint.get('model_id')!r}")
     preprocessing = checkpoint["preprocessing"]
     tile_size = int(preprocessing["tile_size"])
-    model = UNetSmall(in_channels=2, out_channels=1, base=32)
+    cfg = checkpoint.get("model_config") or checkpoint.get("architecture") or {}
+    in_channels = int(cfg.get("in_channels", 2))
+    out_channels = int(cfg.get("out_channels", 1))
+    base = int(cfg.get("base", cfg.get("base_channels", 32)))
+    model = UNetSmall(in_channels=in_channels, out_channels=out_channels, base=base)
     model.load_state_dict(checkpoint["state_dict"])
     model.to(device).eval()
 
@@ -123,7 +140,8 @@ def main():
 
     results = {
         "model_id": checkpoint.get("model_id"),
-        "checkpoint": str(args.checkpoint),
+        "checkpoint": str(checkpoint_path),
+        "checkpoint_sha256": checkpoint_hash,
         "test_dataset_doi": "10.5281/zenodo.13761290",
         "test_protocol": "untouched_part_III_full_scene_sliding_window",
         "threshold": args.threshold,
@@ -132,12 +150,13 @@ def main():
         "scene_false_positive_rate": {
             k: false_positive_scenes[k] / max(scene_counts[k], 1) for k in scene_counts
         },
+        "scene_counts": {k: sum(s.kind == k for s in scenes) for k in ("oil", "no_oil", "lookalike")},
         "scenes": scene_rows,
         "warning": "Do not tune on Part III and then describe these as independent test metrics.",
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(results, indent=2) + "\n")
+    output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: v for k, v in results.items() if k != "scenes"}, indent=2))
 
 

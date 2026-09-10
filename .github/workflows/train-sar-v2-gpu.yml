@@ -35,7 +35,6 @@ jobs:
     runs-on: [self-hosted, linux, x64, gpu]
     timeout-minutes: 1440
     env:
-      DATA_ROOT: ${{ runner.temp }}/varuna-sar-data
       CHECKPOINT: checkpoints/sar_spill_seg_v2.pt
       METRICS: checkpoints/sar_spill_seg_v2_test_metrics.json
 
@@ -46,6 +45,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Set runner-local data path
+        shell: bash
+        run: echo "DATA_ROOT=${RUNNER_TEMP}/varuna-sar-data" >> "$GITHUB_ENV"
+
       - name: Verify CUDA GPU and working disk
         shell: bash
         run: |
@@ -53,9 +56,10 @@ jobs:
           command -v nvidia-smi >/dev/null || { echo 'ERROR: nvidia-smi not found; attach a CUDA GPU runner.'; exit 1; }
           nvidia-smi
           python - <<'PY'
+          import os
           import shutil
           from pathlib import Path
-          root = Path('${{ runner.temp }}')
+          root = Path(os.environ['RUNNER_TEMP'])
           free = shutil.disk_usage(root).free / (1024**3)
           print(f'Free disk: {free:.1f} GiB')
           if free < 160:
@@ -112,7 +116,7 @@ jobs:
           PY
 
       - name: Run safe checkpoint promotion gate
-        if: ${{ inputs.promote }}
+        if: ${{ inputs.promote == true }}
         shell: bash
         run: |
           set -euo pipefail

@@ -64,8 +64,18 @@ chainlit.md
 # Data and databases
 agenthub/agents/youtube/db
 
+# Real SAR training data and generated model artifacts
+# Zenodo Sentinel-1 parts are ~96 GB combined and must never be committed.
+data/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
 # Archive files and large assets
 **/*.zip
+**/*.7z
+**/*.rar
 **/*.tar.gz
 **/*.tar
 **/*.tgz

@@ -10,7 +10,7 @@ from PIL import Image
 from shapely.geometry import shape
 
 from db import db, audit
-from detector import _affine, get_quicklook
+from detector import _affine_bbox_mapper, get_quicklook
 from geo import haversine_km, destination, bearing_deg, major_axis_bearing
 from models import new_id
 
@@ -34,7 +34,7 @@ def detect_bright_targets(png: bytes, bbox: list) -> dict:
     thr = mean_bg + K_SIGMA * np.sqrt(var_bg)
     mask = ((vv > thr) & (vv > 90) & valid).astype(np.uint8)
     n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, 8)
-    to_geo = _affine(bbox, w, h)
+    to_geo = _affine_bbox_mapper(bbox, w, h)
     targets = []
     for i in range(1, n):
         x, y, bw, bh, area = stats[i]

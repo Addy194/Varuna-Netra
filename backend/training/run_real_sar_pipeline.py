@@ -11,6 +11,10 @@ This will:
 4. evaluate the frozen best checkpoint on untouched Part III;
 5. write the checkpoint and independent-test metrics under checkpoints/.
 
+Add --promote to verify the checkpoint/metrics pair and write a deployment
+manifest after successful independent evaluation. Promotion never happens by
+default.
+
 Use --stage prepare to download/extract only, --stage train when data are already
 prepared, or --stage evaluate to evaluate an existing checkpoint.
 """
@@ -29,6 +33,7 @@ HERE = Path(__file__).resolve().parent
 PREPARE = HERE / "prepare_zenodo_data.py"
 TRAIN = HERE / "train_segmentation.py"
 EVALUATE = HERE / "evaluate_segmentation.py"
+PROMOTE = HERE / "promote_segmentation_checkpoint.py"
 
 
 def parse_args():
@@ -50,6 +55,12 @@ def parse_args():
     p.add_argument("--overlap", type=int, default=64)
     p.add_argument("--keep-archives", action="store_true")
     p.add_argument("--skip-verify", action="store_true")
+    p.add_argument("--promote", action="store_true",
+                   help="After independent evaluation, verify and promote this exact checkpoint")
+    p.add_argument("--min-dice", type=float, default=None)
+    p.add_argument("--min-recall", type=float, default=None)
+    p.add_argument("--max-lookalike-fpr", type=float, default=None)
+    p.add_argument("--max-no-oil-fpr", type=float, default=None)
     return p.parse_args()
 
 
@@ -175,6 +186,25 @@ def evaluate(args, layout: dict[str, Path]):
     ])
 
 
+def promote(args):
+    command = [
+        sys.executable,
+        str(PROMOTE),
+        "--checkpoint", str(Path(args.checkpoint)),
+        "--metrics", str(Path(args.metrics_output)),
+    ]
+    optional = (
+        ("--min-dice", args.min_dice),
+        ("--min-recall", args.min_recall),
+        ("--max-lookalike-fpr", args.max_lookalike_fpr),
+        ("--max-no-oil-fpr", args.max_no_oil_fpr),
+    )
+    for flag, value in optional:
+        if value is not None:
+            command.extend([flag, str(value)])
+    run(command)
+
+
 def main():
     args = parse_args()
     data_root = Path(args.data_root).expanduser()
@@ -200,10 +230,15 @@ def main():
 
     if args.stage in {"all", "evaluate"}:
         evaluate(args, layout)
-        print("\nPipeline complete.")
+        print("\nEvaluation complete.")
         print(f"Checkpoint : {Path(args.checkpoint).resolve()}")
         print(f"Test metrics: {Path(args.metrics_output).resolve()}")
         print("Only quote independent Part III metrics from the generated metrics JSON in SIH materials.")
+        if args.promote:
+            promote(args)
+            print("\nCheckpoint promotion checks passed and deployment manifest was written.")
+        else:
+            print("Re-run with --stage evaluate --promote after reviewing metrics to activate the promotion gate.")
 
 
 if __name__ == "__main__":

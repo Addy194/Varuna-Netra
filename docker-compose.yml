@@ -14,6 +14,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+      args:
+        INSTALL_SAR_SEG_RUNTIME: ${INSTALL_SAR_SEG_RUNTIME:-false}
     restart: unless-stopped
     environment:
       MONGO_URL: ${MONGO_URL:-mongodb://mongo:27017}
@@ -39,10 +41,17 @@ services:
       JOB_MAX_ATTEMPTS: ${JOB_MAX_ATTEMPTS:-3}
       JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-900}
       PC_SDK_SUBSCRIPTION_KEY: ${PC_SDK_SUBSCRIPTION_KEY:-}
+      SAR_SEG_ENABLE: ${SAR_SEG_ENABLE:-auto}
+      SAR_SEG_CHECKPOINT: ${SAR_SEG_CHECKPOINT:-/models/sar_spill_seg_v2.pt}
+      SAR_SEG_THRESHOLD: ${SAR_SEG_THRESHOLD:-0.5}
+      SAR_SEG_OVERLAP: ${SAR_SEG_OVERLAP:-64}
+      SAR_SEG_MAX_PIXELS: ${SAR_SEG_MAX_PIXELS:-16777216}
     depends_on:
       mongo:
         condition: service_healthy
-    volumes: ["local_storage:/data/storage"]
+    volumes:
+      - local_storage:/data/storage
+      - ./checkpoints:/models:ro
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/', timeout=5).read()"]

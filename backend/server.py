@@ -149,7 +149,17 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=_cors_origins(),
-    allow_origin_regex=os.environ.get("CORS_ORIGIN_REGEX") or r"^https://[a-z0-9.-]+\.(emergentagent\.com|emergent\.host|emergentcf\.cloud)$",
+    allow_origin_regex=os.environ.get("CORS_ORIGIN_REGEX") or r"^https://vessel-correlate-1[a-z0-9-]*(\.preview)?\.(emergentagent\.com|emergent\.host|emergentcf\.cloud)$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+    return resp

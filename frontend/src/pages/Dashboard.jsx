@@ -62,8 +62,8 @@ export default function Dashboard() {
     <div className="flex h-full overflow-hidden">
       <section className="flex-1 overflow-y-auto p-6">
         <div className="mb-6 fade-up">
-          <p className="label-mono mb-1">Decision support · not a legal determination</p>
           <h1 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">Spill Surveillance</h1>
+          <p className="label-mono mt-1" data-testid="surveillance-disclaimer">Decision Support System · Not a Legal Determination</p>
         </div>
         <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
           {kpis.map((k, i) => (

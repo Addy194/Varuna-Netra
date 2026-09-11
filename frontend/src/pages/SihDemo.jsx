@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Play, ChevronRight, ChevronLeft, Satellite, Waves, Radio, Ship, Scale, Fingerprint, FolderOpen, Globe2, HelpCircle } from "lucide-react";
-import { api, fmtTime } from "@/lib/api";
+import { Play, ChevronRight, ChevronLeft, Satellite, Waves, Radio, Ship, Scale, Fingerprint, FolderOpen, Globe2, HelpCircle, PinOff } from "lucide-react";
+import { toast } from "sonner";
+import { api, apiError, fmtTime, hasRole } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { CandidatesTable } from "@/components/case/CandidatesTable";
 import { Provenance } from "@/components/case/Provenance";
 import { ChronoTimeline } from "@/components/case/ChronoTimeline";
@@ -13,6 +15,7 @@ const Tag = ({ children, tone = "#38BDF8", testid }) => <span data-testid={testi
 /** Judge walkthrough — every value is fetched from the real backend; the case is a stored REFERENCE CASE, never presented as live. */
 export default function SihDemo() {
   const nav = useNavigate();
+  const { user } = useAuth();
   const [step, setStep] = useState(0);
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
@@ -70,7 +73,8 @@ export default function SihDemo() {
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <div><p className="label-mono mb-1">Smart India Hackathon · judge walkthrough · ~2–3 minutes</p><h1 className="font-display text-3xl font-extrabold tracking-tight">Run SIH Demo</h1></div>
         <Tag tone="#FFB703" testid="demo-mode-tag">REFERENCE CASE — STORED DATA · not LIVE</Tag>
-        <button data-testid="demo-restart" onClick={() => { setStep(0); load(); }} className="ml-auto inline-flex items-center gap-1 rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-slate-300" style={{ borderColor: "var(--border-highlight)" }}><Play size={12} /> Restart</button>
+        {hasRole(user, "admin") && <button data-testid="demo-unpin" onClick={async () => { if (!window.confirm("Unpin the SIH reference case? Run SIH Demo will show REFERENCE CASE NOT PINNED until an admin pins another case.")) return; try { await api.delete("/demo/reference"); toast.success("Reference case unpinned"); load(); } catch (e) { toast.error(apiError(e)); } }} className="ml-auto inline-flex items-center gap-1 rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-amber-300" style={{ borderColor: "var(--border-highlight)" }} title="Admin: unpin the reference case (pin another from any case's detail page)"><PinOff size={12} /> Unpin reference</button>}
+        <button data-testid="demo-restart" onClick={() => { setStep(0); load(); }} className={`${hasRole(user, "admin") ? "" : "ml-auto "}inline-flex items-center gap-1 rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-slate-300`} style={{ borderColor: "var(--border-highlight)" }}><Play size={12} /> Restart</button>
       </div>
       {err && <p className="rounded border border-rose-500/50 px-3 py-2 text-xs text-rose-300" data-testid="demo-error">Demo unavailable: {err}</p>}
       {!d && !err && <p className="font-mono text-xs text-slate-500">Loading real case data…</p>}

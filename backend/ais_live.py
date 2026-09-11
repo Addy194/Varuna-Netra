@@ -364,8 +364,11 @@ async def status_async() -> dict:
     s = status()
     if s["state"] == "STANDBY":
         snap = await db.settings.find_one({"key": "ais_runtime_status", "owner": {"$ne": OWNER}}, {"_id": 0, "key": 0})
-        if snap and (datetime.now(timezone.utc) - snap["at"]).total_seconds() < 90:
-            return {**snap, "served_by": OWNER, "snapshot_age_s": int((datetime.now(timezone.utc) - snap["at"]).total_seconds())}
+        if snap:
+            at = snap["at"] if snap["at"].tzinfo else snap["at"].replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - at).total_seconds()
+            if age < 90:
+                return {**snap, "served_by": OWNER, "snapshot_age_s": int(age)}
     return s
 
 

@@ -5,13 +5,11 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { apiError } from "@/lib/api";
 
-const DEMO_PASSWORDS = Object.fromEntries(
-  (process.env.REACT_APP_DEMO_PASSWORDS || "").split(",").map((p) => p.split(":")).filter((kv) => kv.length === 2)
-);
 const DEMO = [
   { role: "analyst", email: "analyst@sentinelmar.demo", scope: "ingest · correlate · review" },
   { role: "supervisor", email: "supervisor@sentinelmar.demo", scope: "+ acknowledge alerts · override cases" },
 ];
+const DEMO_PASSWORDS = {}; // never ship passwords in the bundle — demo buttons only pre-fill the e-mail
 
 export default function Login() {
   const { user, login } = useAuth();

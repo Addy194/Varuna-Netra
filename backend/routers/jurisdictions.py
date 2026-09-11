@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -43,7 +44,7 @@ async def list_zones(q: Optional[str] = None, zone_type: Optional[str] = None, c
     """Paginated zone catalogue WITHOUT geometry by default (worldwide dataset is too large for the browser); use /jurisdictions/geojson for map features."""
     flt = {}
     if q:
-        rx = {"$regex": q.strip(), "$options": "i"}
+        rx = {"$regex": re.escape(q.strip()[:80]), "$options": "i"}
         flt["$or"] = [{"code": rx}, {"name": rx}, {"country": rx}, {"country_name": rx}, {"territory": rx}, {"authority": rx}]
     if zone_type:
         flt["zone_type"] = zone_type

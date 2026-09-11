@@ -118,7 +118,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     user = await db.users.find_one({"email": email})
     if not user:
         await audit("user", "unknown", "auth.reset_requested_unknown_email", {"email": email}, email)
-        return {"message": GENERIC_MSG, "delivery": "none"}
+        return {"message": GENERIC_MSG, "delivery": "email"}  # identical shape for unknown accounts — no enumeration
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     link = f"{os.environ['FRONTEND_URL'].rstrip('/')}/reset-password?token={token}"

@@ -38,29 +38,29 @@ export const Layout = () => {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden text-slate-100" style={{ background: "var(--bg-primary)" }}>
-      <header className="flex h-14 shrink-0 items-center gap-6 border-b px-5" style={{ borderColor: "var(--border-default)", background: "rgba(17,24,39,0.85)", backdropFilter: "blur(12px)" }}>
-        <NavLink to="/" data-testid="nav-brand" className="flex items-center gap-2.5">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4" style={{ borderColor: "var(--border-default)", background: "rgba(17,24,39,0.85)", backdropFilter: "blur(12px)" }}>
+        <NavLink to="/" data-testid="nav-brand" className="flex shrink-0 items-center gap-2.5">
           <span className="grid h-8 w-8 place-items-center rounded-md" style={{ background: "rgba(0,240,255,0.12)", border: "1px solid rgba(0,240,255,0.4)" }}>
             <Radar size={16} color="#00F0FF" />
           </span>
           <span className="whitespace-nowrap font-display text-lg font-bold tracking-tight">Varuna <span style={{ color: "#00F0FF" }}>Netra</span></span>
         </NavLink>
-        <nav className="flex items-center gap-1">
+        <nav className="flex flex-1 min-w-0 items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
           {links.map(({ to, label, icon: Icon, id }) => (
             <NavLink key={to} to={to} end={to === "/"} data-testid={id}
-              className={({ isActive }) => `flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors ${isActive ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"}`}>
+              className={({ isActive }) => `flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${isActive ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"}`}>
               <Icon size={14} /> {label}
             </NavLink>
           ))}
           {hasRole(user, "admin") && (
-            <NavLink to="/users" data-testid="nav-users-link" className={({ isActive }) => `flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors ${isActive ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"}`}>
+            <NavLink to="/users" data-testid="nav-users-link" className={({ isActive }) => `flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${isActive ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"}`}>
               <UsersIcon size={14} /> Users
             </NavLink>
           )}
         </nav>
-        <div className="ml-auto flex items-center gap-6">
+        <div className="flex shrink-0 items-center gap-4">
           {(stats || statsErr) && (
-            <div className="hidden items-center gap-5 md:flex" title="Real database counts (demo/mock records excluded)">
+            <div className="hidden items-center gap-4 xl:flex" title="Real database counts (demo/mock records excluded)">
               <Stat label="Active cases" value={statsErr ? "Unavailable" : stats.active_cases} testId="nav-stat-cases" onClick={() => nav("/?origin=real")} />
               <Stat label="Pending" value={statsErr ? "Unavailable" : stats.pending_review} color="#FFB703" testId="nav-stat-pending" onClick={() => nav("/?origin=real&view=pending")} />
               <Stat label="Alerts" value={statsErr ? "Unavailable" : stats.alerts.unread} color="#FF2A6D" icon={<ShieldAlert size={12} />} testId="nav-stat-alerts" onClick={() => nav("/alerts?alerts=unread")} />
@@ -69,11 +69,11 @@ export const Layout = () => {
             </div>
           )}
           {!stats && !statsErr && (
-            <div className="hidden items-center gap-5 md:flex" data-testid="nav-stats-loading">
+            <div className="hidden items-center gap-4 xl:flex" data-testid="nav-stats-loading">
               <Stat label="Cases" value="—" /><Stat label="Pending" value="—" color="#FFB703" /><Stat label="Alerts" value="—" color="#FF2A6D" />
             </div>
           )}
-          <div className="flex items-center gap-2 font-mono text-xs text-slate-300" data-testid="utc-clock">
+          <div className="hidden shrink-0 items-center gap-2 whitespace-nowrap font-mono text-xs text-slate-300 sm:flex" data-testid="utc-clock">
             <span className="pulse-dot" />
             {clock.toISOString().replace("T", " ").slice(0, 19)} UTC
           </div>

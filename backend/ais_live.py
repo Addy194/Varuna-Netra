@@ -50,8 +50,23 @@ _buffer: list = []
 _reconnect_event = asyncio.Event()
 
 
+def api_keys() -> list:
+    """AISSTREAM_API_KEYS (comma-separated pool) + AISSTREAM_API_KEY, de-duplicated. Values never leave this module."""
+    raw = [os.environ.get("AISSTREAM_API_KEY", "")] + os.environ.get("AISSTREAM_API_KEYS", "").split(",")
+    out = []
+    for k in (x.strip() for x in raw):
+        if k and k not in out:
+            out.append(k)
+    return out
+
+
 def key_configured() -> bool:
-    return bool(os.environ.get("AISSTREAM_API_KEY"))
+    return bool(api_keys())
+
+
+def current_key() -> Optional[str]:
+    keys = api_keys()
+    return keys[state.get("key_index", 0) % len(keys)] if keys else None
 
 
 def ingest_enabled() -> bool:
@@ -258,7 +273,7 @@ async def _run() -> None:
     asyncio.create_task(_renew_lease_loop())
     while True:
         _reconnect_event.clear()
-        key = os.environ.get("AISSTREAM_API_KEY")
+        key = current_key()
         if not ingest_enabled():
             state.update({"connected": False, "subscription_confirmed": False, "socket_open": False, "role": "disabled", "error": STANDBY_DISABLED_REASON})
             await _snapshot()
@@ -292,8 +307,17 @@ async def _run() -> None:
             if got_msgs:
                 attempt = 0  # healthy session before the drop → restart the backoff ladder
             if state["kicks"] >= 3:
-                state["error"] = "KEY_IN_USE_ELSEWHERE: AISStream closed the socket right after subscription 3× in a row without data — this API key is being used by another client (AISStream allows one connection per key; e.g. preview + production sharing a key). Use a separate key per deployment or set AIS_INGEST_ENABLED=false on the other one."
-                delay = 120 + random.uniform(0, 30)  # stop fighting the other deployment
+                keys = api_keys()
+                if len(keys) > 1:
+                    state["key_index"] = (state.get("key_index", 0) + 1) % len(keys)
+                    state["kicks"] = 0
+                    state["key_rotations"] = state.get("key_rotations", 0) + 1
+                    state["error"] = f"KEY_ROTATED: key #{state['key_index'] + 1}/{len(keys)} selected after the previous key was held by another client (one connection per key)"
+                    delay = 5 + random.uniform(0, 3)
+                    logger.warning("aisstream: key in use elsewhere — rotating to pool key #%d/%d", state["key_index"] + 1, len(keys))
+                else:
+                    state["error"] = "KEY_IN_USE_ELSEWHERE: AISStream closed the socket right after subscription 3× in a row without data — this API key is being used by another client (AISStream allows one connection per key; e.g. preview + production sharing a key). Use a separate key per deployment or set AIS_INGEST_ENABLED=false on the other one."
+                    delay = 120 + random.uniform(0, 30)  # stop fighting the other deployment
             else:
                 delay = BACKOFF[min(attempt, len(BACKOFF) - 1)] + random.uniform(0, 1)
             attempt += 1
@@ -353,6 +377,7 @@ def _status_fields() -> dict:
     st = connection_state()
     from livemode import APP_ENV
     return {"source": SOURCE, "mode": "live", "state": st, "feed": _feed_label(st), "feed_state": st, "environment": APP_ENV, "ingest_enabled": ingest_enabled(), "key_configured": key_configured(), "configured": key_configured(),
+            "keys_configured": len(api_keys()), "active_key_index": (state.get("key_index", 0) % len(api_keys()) + 1) if api_keys() else None, "key_rotations": state.get("key_rotations", 0),
             "connected": bool(state["socket_open"] and state["subscription_confirmed"]),
             "websocket_open": bool(state["socket_open"]), "subscription_confirmed": state["subscription_confirmed"], "subscription_kind": state.get("subscription_kind"),
             "messages_received": state["messages"], "positions_parsed": state["positions"], "regional_messages": state["positions"], "positions_stored": state["inserted"], "messages_per_min": messages_per_min(), "messages_per_minute": messages_per_min(),
@@ -397,7 +422,7 @@ async def test_connection(timeout_s: float = 12.0) -> dict:
         cov = await get_coverage()
         async with websockets.connect(WS_URL, close_timeout=3, max_size=2**22) as ws:
             out["websocket"] = True
-            await ws.send(json.dumps({"APIKey": os.environ["AISSTREAM_API_KEY"], "BoundingBoxes": to_aisstream_boxes(cov["bboxes"]), "FilterMessageTypes": FILTER_TYPES}))
+            await ws.send(json.dumps({"APIKey": current_key(), "BoundingBoxes": to_aisstream_boxes(cov["bboxes"]), "FilterMessageTypes": FILTER_TYPES}))
             out["subscription"] = True
             msg = decode_frame(await asyncio.wait_for(ws.recv(), timeout=timeout_s))
             if msg and msg.get("error"):

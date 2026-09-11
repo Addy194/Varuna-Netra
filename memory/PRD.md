@@ -250,3 +250,8 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - Production deployment (AIS LIVE ownership, Google login on deployed URL, CORS from deployed origin) — must be checked on the deployed URL after redeploy.
 - Covered-region live AIS + coverage prompt "Switch" path cannot be exercised in preview (ingestion disabled by design).
 - 106/112 real cases have no historical AIS in their window → NOT ANALYZABLE; only SPL-20260910-106 has candidates.
+
+## 2026-09-11 — AIS key pool + preview re-enabled
+- User supplied 4 AISStream keys (never printed). Preview: `AISSTREAM_API_KEY`=key #1, `AIS_INGEST_ENABLED=true` → verified LIVE (subscription confirmed, 2 vessels Bay of Bengal, 0 reconnects). Production should use keys #2–#4 via `AISSTREAM_API_KEYS` (comma list) — worker rotates to the next pool key after a KEY_IN_USE_ELSEWHERE conflict (`key_rotations`, `active_key_index`, `keys_configured` in status; values never exposed).
+- Coverage prompt verified live: Andaman AOI → prompt shown → Switch → Bay of Bengal with reason toast; default AOI restored afterwards.
+- Advice: keys were pasted in chat — rotate them at aisstream.io after SIH.

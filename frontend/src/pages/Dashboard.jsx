@@ -49,7 +49,8 @@ export default function Dashboard() {
     { label: "Pending review", value: kv(stats?.pending_review), icon: Clock, color: "#FFB703", to: "/?origin=real&view=pending" },
     { label: "AIS fixes indexed", value: kv(stats?.ais_fixes_indexed), icon: FileCheck, color: "#00F0FF", to: "/ingest" },
   ];
-  const ORIGIN_UI = { detector: ["REAL · SAR", "#10B981"], analyst: ["REAL · ANALYST", "#10B981"], imported: ["IMPORTED", "#FFB703"], demo: ["DEMO", "#94A3B8"], reference: ["REFERENCE", "#38BDF8"] };
+  const ORIGIN_UI = { detector: ["LIVE DETECTED", "#10B981"], analyst: ["ANALYST CREATED", "#38BDF8"], imported: ["IMPORTED HISTORICAL", "#FFB703"], demo: ["DEMO / REFERENCE", "#94A3B8"], reference: ["DEMO / REFERENCE", "#94A3B8"] };
+  const stateUi = (c) => c.correlation_state && c.correlation_state !== "SCORED" ? <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500" title={c.correlation_state === "NOT_ANALYZED" ? "no correlation run has been executed for this case" : c.correlation_state === "NO_AIS_COVERAGE" ? "correlation ran but found zero AIS positions in the spatio-temporal window" : "AIS positions exist but no vessel track qualified as a candidate"}>{c.correlation_state_label}</span> : null;
   const heading = view === "pending" ? `Pending review · ${base.length} open cases awaiting analyst decision` : view === "probable" ? `Probable / confirmed · ${base.length}` : `Investigation cases · ${base.length}`;
 
   return (
@@ -103,11 +104,11 @@ export default function Dashboard() {
                   <td className="px-4 py-3 font-mono text-xs text-slate-300">{fmtTime(c.acquisition_time)}</td>
                   <td className="px-4 py-3 text-xs text-slate-400">{c.source}</td>
                   <td className="px-4 py-3 font-mono text-[10px]" data-testid={`case-jurisdiction-${c.case_number}`} title={c.primary_jurisdiction?.authority}>{c.primary_jurisdiction ? <span className="text-cyan-300">{c.primary_jurisdiction.code}</span> : <span className="text-slate-500">unassigned</span>}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{pct(c.detection_confidence)}{c.quality_flags?.length > 0 && <span className="ml-1 text-amber-400" title={c.quality_flags.join(", ")}>⚑</span>}</td>
+                  <td className="px-4 py-3 font-mono text-xs" data-testid={`case-conf-${c.case_number}`}>{c.detection_confidence_source === "detector" ? pct(c.detection_confidence) : <span className="text-slate-500" title="N/A — value supplied at registration by the analyst/API caller, not produced by a detector">N/A</span>}{c.quality_flags?.length > 0 && <span className="ml-1 text-amber-400" title={c.quality_flags.join(", ")}>⚑</span>}</td>
                   <td className="px-4 py-3"><StatusBadge status={c.attribution_status} testId={`case-status-${c.case_number}`} /></td>
-                  <td className="px-4 py-3"><BandBadge band={c.confidence_band} /></td>
-                  <td className="px-4 py-3 font-mono text-xs">{c.top_score != null ? c.top_score.toFixed(3) : "—"}{c.degraded && <span className="ml-1 text-purple-300" title="degraded: no drift inputs">◐</span>}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{c.candidate_count ?? "—"}</td>
+                  <td className="px-4 py-3" data-testid={`case-band-${c.case_number}`}>{stateUi(c) || <BandBadge band={c.confidence_band} />}</td>
+                  <td className="px-4 py-3 font-mono text-xs" data-testid={`case-topscore-${c.case_number}`}>{stateUi(c) || (c.top_score != null ? c.top_score.toFixed(3) : "—")}{c.degraded && <span className="ml-1 text-purple-300" title="degraded: no drift inputs">◐</span>}</td>
+                  <td className="px-4 py-3 font-mono text-xs">{c.correlation_state === "NOT_ANALYZED" ? <span className="text-slate-500">—</span> : (c.candidate_count ?? 0)}</td>
                   <td className="px-4 py-3 font-mono text-[10px] uppercase tracking-wider text-slate-400">{c.review_state}</td>
                 </tr>
               ))}

@@ -177,7 +177,7 @@ export default function CaseDetail() {
         <div className="border-b p-4" style={{ borderColor: "var(--border-default)" }}>
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="label-mono">{c.source} · det. conf {pct(c.detection_confidence)}</p>
+              <p className="label-mono">{c.source} · det. conf {c.source === "dark_spot_detector" ? pct(c.detection_confidence) : <span title="value supplied at registration, not produced by a detector">N/A (registrant-supplied)</span>}</p>
               <h1 className="font-display text-2xl font-bold tracking-tight" data-testid="case-number">{c.case_number}</h1>
               <p className="font-mono text-xs text-slate-400">Acquired {fmtTime(c.acquisition_time)} · {spill?.estimated_area_km2} km² · v{c.latest_result_version}</p>
             </div>

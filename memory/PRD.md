@@ -221,3 +221,17 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 
 ## Known limitations
 - Mock detector is a placeholder (MOCKED by design). Drift model is a simple 3%-wind + current linear back-projection. No encryption/RBAC yet.
+
+## 2026-09-11 — Iteration 29: Cases-page provenance audit + Emergent Google sign-in (invite-only)
+- Audit of 197 DB cases: 111 detector (LIVE DETECTED, real Sentinel-1 scene + experimental dark-spot detector), 1 analyst (ANALYST CREATED, scene attached, API-supplied polygon), 85 imported (IMPORTED HISTORICAL — no Sentinel scene; includes 3 alert-verification test cases re-tagged from analyst→imported after classify_origin fix: no scene_id ⇒ imported). 0 demo.
+- Repeated 80%/85% "detection confidence": NOT a detector output — values typed in at registration (POST /spills payload, processing_version external-polygon-1.0 / threat-alert-verification). Backend now returns `detection_confidence_source` (detector|registrant); UI shows N/A for registrant-supplied values (Cases table, CaseDetail header, Provenance panel). Detector values (0.28–0.45, darkspot-otsu-0.1.0-experimental) still shown.
+- Band/Top score blanks replaced with `correlation_state` from DB: NOT_ANALYZED (no run), NO_AIS_COVERAGE (run, position_count 0), NO_CANDIDATE_IN_TIME_WINDOW, SCORED.
+- Counters: /api/dashboard/summary pure aggregation; live_cases 107 = open detector/analyst cases; imported excluded (verified).
+- Google sign-in: `GET /api/auth/capabilities`, `POST /api/auth/google/session`, `backend/google_auth.py`; flag `GOOGLE_AUTH_ENABLED`; DEMO_MODE ⇒ DISABLED; invite-only (existing active user), role from DB; issues the same JWT cookie. Health endpoints expose auth status (no secrets). Login page hides Google button/divider and demo-account block unless backend says so.
+- Auth persistence across backend restart verified (stateless JWT). "token file was lost" = testing-agent artifact, not a product issue.
+- Testing: /app/test_reports/iteration_29.json — 19/19 backend + all frontend flows PASS.
+
+### Backlog (user-requested, not yet done)
+- P1 Reference Case Pin (admin pins case for /demo), Evidence Timeline "Not available" audit, AIS coverage auto-switch with confirmation, Canada EEZ re-import.
+- P1 Production deployment validation (APP_ENV=production, DEMO_MODE=false, GOOGLE_AUTH_ENABLED=true, production AISSTREAM key) — UNVERIFIED until deployed.
+- P2 Resend invitation e-mails (only if verified sender domain).

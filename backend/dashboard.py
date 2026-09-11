@@ -7,7 +7,37 @@ REAL_ORIGINS = ["detector", "analyst"]
 REAL_CASE_FILTER = {"source": {"$nin": DEMO_SOURCES}, "is_demo": {"$ne": True}, "origin": {"$in": REAL_ORIGINS}}
 DEMO_CASE_FILTER = {"$or": [{"source": {"$in": DEMO_SOURCES}}, {"is_demo": True}, {"origin": "demo"}]}
 PENDING_FILTER = {"status": "open", "review_state": "pending"}
-ORIGIN_LABEL = {"detector": "REAL · SAR DETECTOR", "analyst": "REAL · ANALYST", "imported": "IMPORTED", "demo": "DEMO", "reference": "REFERENCE"}
+ORIGIN_LABEL = {"detector": "LIVE DETECTED", "analyst": "ANALYST CREATED", "imported": "IMPORTED HISTORICAL", "demo": "DEMO / REFERENCE", "reference": "DEMO / REFERENCE"}
+CORRELATION_STATE_LABEL = {"NOT_ANALYZED": "NOT ANALYZED", "NO_AIS_COVERAGE": "NO AIS COVERAGE", "NO_CANDIDATE_IN_TIME_WINDOW": "NO CANDIDATE IN TIME WINDOW", "SCORED": "SCORED"}
+
+
+def confidence_source(case: dict) -> str:
+    """detector = value produced by the SAR dark-spot detector; registrant = number typed in at registration (API/analyst) — not a detector output."""
+    return "detector" if case.get("source") == "dark_spot_detector" else "registrant"
+
+
+def correlation_state(case: dict, result: dict | None) -> str:
+    if not case.get("latest_result_version") or not result:
+        return "NOT_ANALYZED"
+    if not result.get("position_count"):
+        return "NO_AIS_COVERAGE"
+    if not result.get("vessel_count") or not case.get("candidate_count"):
+        return "NO_CANDIDATE_IN_TIME_WINDOW"
+    return "SCORED"
+
+
+async def annotate_cases(db, rows: list) -> list:
+    ids = [c["id"] for c in rows if c.get("latest_result_version")]
+    latest = {}
+    if ids:
+        async for r in db.correlation_results.find({"case_id": {"$in": ids}}, {"_id": 0, "case_id": 1, "version": 1, "position_count": 1, "vessel_count": 1}).sort("version", -1):
+            latest.setdefault(r["case_id"], r)
+    for c in rows:
+        st = correlation_state(c, latest.get(c["id"]))
+        c["correlation_state"], c["correlation_state_label"] = st, CORRELATION_STATE_LABEL[st]
+        c["detection_confidence_source"] = confidence_source(c)
+        c["origin_label"] = ORIGIN_LABEL.get(c.get("origin"), c.get("origin_label"))
+    return rows
 
 SEMANTICS = {
     "live_cases": "open cases with origin detector/analyst (real Sentinel-1 scene attached at registration); imported API polygons and demo/seed records excluded",
@@ -22,8 +52,8 @@ def classify_origin(case: dict, spill: dict | None, actor: str | None = None) ->
     if case.get("is_demo") or case.get("source") in DEMO_SOURCES or (actor or "").lower() == "seed":
         return "demo"
     pv = ((spill or {}).get("processing_version") or ((spill or {}).get("raw_input") or {}).get("processing_version") or "")
-    if not case.get("scene_id") and (pv.startswith("external-polygon") or not pv):
-        return "imported"
+    if not case.get("scene_id"):
+        return "imported"  # no Sentinel scene attached at registration — polygon supplied via API/form, unverified
     if case.get("source") == "dark_spot_detector" or "darkspot" in pv:
         return "detector"
     return "analyst"

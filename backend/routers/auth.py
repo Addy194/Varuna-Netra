@@ -46,6 +46,45 @@ async def logout(response: Response, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+@router.get("/auth/capabilities")
+async def auth_capabilities():
+    """Public, secret-free: which sign-in methods this deployment actually supports."""
+    from google_auth import capabilities
+    return capabilities()
+
+
+class GoogleSession(BaseModel):
+    session_id: str
+
+
+@router.post("/auth/google/session")
+async def google_session(body: GoogleSession, request: Request, response: Response):
+    """Exchange the Emergent session_id server-side; grant access ONLY to an existing active user (role from DB, never from the client)."""
+    from google_auth import google_status, fetch_google_identity, UNAUTHORIZED_MSG
+    if not google_status()["enabled"]:
+        raise HTTPException(403, "Google sign-in is not enabled for this deployment")
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "unknown")).split(",")[0].strip()
+    ident = f"{ip}:google"
+    await check_lockout(ident)
+    try:
+        ident_data = await fetch_google_identity(body.session_id.strip())
+    except ValueError as e:
+        await record_failure(ident)
+        raise HTTPException(401, str(e))
+    email = ident_data["email"]
+    user = await db.users.find_one({"email": email})
+    if not user or not user.get("active", True):
+        await record_failure(ident)
+        await audit("user", user["id"] if user else "unknown", "auth.google_denied", {"email": email, "reason": "inactive" if user else "not_authorized"}, email)
+        raise HTTPException(403, UNAUTHORIZED_MSG)
+    await clear_failures(ident)
+    token = create_access_token(user)
+    response.set_cookie("access_token", token, httponly=True, secure=True, samesite="lax", max_age=ACCESS_HOURS * 3600, path="/")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"last_login": datetime.now(timezone.utc), "last_login_method": "google"}})
+    await audit("user", user["id"], "auth.login", {"email": email, "method": "google"}, email)
+    return {"access_token": token, "token_type": "bearer", "user": clean(public_user(user))}
+
+
 @router.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return clean(user)

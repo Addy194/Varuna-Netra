@@ -23,7 +23,7 @@ export const Provenance = ({ caseId }) => {
           {p.satellite.status && <p className="mt-1 text-[10px] text-slate-500">{p.satellite.status}</p>}
         </div>
         <div><p className="label-mono mb-1 flex items-center gap-2">Detection <Badge v={p.detection.badge} testid="provenance-det-badge" /></p>
-          <R k="type" v={p.detection.type} /><R k="source" v={p.detection.source} /><R k="version" v={p.detection.model} /><R k="confidence" v={p.detection.confidence != null ? p.detection.confidence.toFixed(2) : null} />
+          <R k="type" v={p.detection.type} /><R k="source" v={p.detection.source} /><R k="version" v={p.detection.model} /><R k="confidence" v={p.detection.confidence != null ? p.detection.confidence.toFixed(2) : (p.detection.confidence_note || null)} />
           <p className="mt-1 text-[10px] text-amber-300/80" data-testid="provenance-validation-note">{p.detection.validation}</p>
         </div>
         <div><p className="label-mono mb-1 flex items-center gap-2">AIS <Badge v={p.ais.badge} testid="provenance-ais-badge" /></p>

@@ -92,7 +92,9 @@ async def api_health(request: Request):
         await db.command("ping")
     except Exception:  # noqa: BLE001
         db_ok = False
+    from google_auth import capabilities
     return {"status": "ok" if db_ok else "degraded", "ready": bool(getattr(app.state, "ready", False)), "environment": APP_ENV, "request_origin_seen": request.headers.get("origin"), "demo_mode": DEMO_MODE, "database": "online" if db_ok else "offline",
+            "authentication": capabilities()["authentication"],
             "ais": {"key_configured": st["configured"], "state": st["state"], "feed": st.get("feed"), "connected": st["connected"], "subscription_confirmed": st["subscription_confirmed"],
                     "messages_received": st["messages_received"], "positions_stored": st["positions_stored"], "vessels_active": st["vessels_active"], "last_message_at": st["last_message_at"],
                     "reconnect_count": st["reconnects"], "worker_role": st.get("worker_role"), "worker_owner": st.get("worker_owner")},

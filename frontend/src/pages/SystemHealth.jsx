@@ -66,6 +66,12 @@ export default function SystemHealth() {
         </div>
       )}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {h.authentication && (
+          <Card icon={ShieldAlert} title={`Authentication · Google ${h.authentication.google.status}`} ok={h.authentication.google.status === "READY"} warn={h.authentication.google.status !== "CONFIGURATION_ERROR"} testid="health-auth">
+            <Row k="email / password" v={h.authentication.email_password ? "ENABLED" : "DISABLED"} testid="health-auth-password" />
+            <Row k="google sign-in" v={h.authentication.google.status} testid="health-auth-google" /><Row k="provider" v={h.authentication.google.provider} /><Row k="policy" v="invite-only · role from user record" />
+          </Card>
+        )}
         <Card icon={Satellite} title="Sentinel-1 STAC" ok={h.sentinel_stac.online} testid="health-stac">
           <Row k="provider" v={h.sentinel_stac.provider} /><Row k="latency" v={h.sentinel_stac.latency_ms != null ? `${h.sentinel_stac.latency_ms} ms` : h.sentinel_stac.error} />
           <Row k="last real scene" v={h.last_scene ? `${h.last_scene.provider_scene_id?.slice(0, 32)}` : "none yet"} testid="health-last-scene" /><Row k="acquired" v={h.last_scene ? `${fmtTime(h.last_scene.acquisition_time)} (${age(h.last_scene.acquisition_time)})` : "—"} />

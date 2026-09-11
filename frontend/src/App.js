@@ -24,6 +24,7 @@ import Verify from "@/pages/Verify";
 import { LiveFeedProvider } from "@/context/LiveFeed";
 import { InactivityGuard } from "@/components/InactivityGuard";
 import { ForgotPassword, ResetPassword } from "@/pages/PasswordReset";
+import AuthCallback from "@/pages/AuthCallback";
 
 const Protected = ({ children, role }) => {
   const { user } = useAuth();
@@ -34,13 +35,11 @@ const Protected = ({ children, role }) => {
   return children;
 };
 
-function App() {
+const AppRoutes = () => {
+  const location = useLocation();
+  // OAuth return: session_id lives in the URL fragment — must be handled before any Protected route runs.
+  if (location.hash?.includes("session_id=")) return <AuthCallback />;
   return (
-    <div className="App">
-      <AuthProvider>
-        <BrowserRouter>
-          <LiveFeedProvider>
-          <InactivityGuard />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -64,6 +63,17 @@ function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
+  );
+};
+
+function App() {
+  return (
+    <div className="App">
+      <AuthProvider>
+        <BrowserRouter>
+          <LiveFeedProvider>
+          <InactivityGuard />
+          <AppRoutes />
           </LiveFeedProvider>
         </BrowserRouter>
       </AuthProvider>

@@ -50,7 +50,8 @@ async def list_cases(status: Optional[str] = None, attribution_status: Optional[
         q["attribution_status"] = {"$in": attribution_status.split(",")}
     if review_state:
         q["review_state"] = review_state
-    return clean(await db.cases.find(q, {"_id": 0}).sort("acquisition_time", -1).to_list(limit))
+    from dashboard import annotate_cases
+    return clean(await annotate_cases(db, await db.cases.find(q, {"_id": 0}).sort("acquisition_time", -1).to_list(limit)))
 
 
 @router.get("/cases/{case_id}")

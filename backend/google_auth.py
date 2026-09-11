@@ -1,0 +1,42 @@
+"""Emergent-managed Google sign-in. Identity comes from Google; authorization comes ONLY from the users collection (invite-only)."""
+import logging
+import os
+
+import httpx
+
+from livemode import APP_ENV, DEMO_MODE
+
+logger = logging.getLogger("google_auth")
+SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+UNAUTHORIZED_MSG = "Your Google account is not authorized for Varuna Netra. Contact an administrator for access."
+
+
+def google_status() -> dict:
+    flag = os.environ.get("GOOGLE_AUTH_ENABLED", "").strip().lower()
+    if DEMO_MODE:
+        status = "DISABLED"
+    elif flag in ("1", "true", "yes"):
+        status = "READY"
+    elif flag in ("0", "false", "no"):
+        status = "DISABLED"
+    else:
+        status = "UNCONFIGURED"
+    return {"enabled": status == "READY", "configured": flag != "", "status": status, "provider": "Emergent-managed Google OAuth"}
+
+
+def capabilities() -> dict:
+    return {"environment": APP_ENV, "demo_mode": DEMO_MODE, "authentication": {"email_password": True, "google": google_status()}}
+
+
+async def fetch_google_identity(session_id: str) -> dict:
+    """Server-side exchange of the one-time session_id — the frontend never talks to the auth provider's data endpoint."""
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(SESSION_DATA_URL, headers={"X-Session-ID": session_id})
+    if r.status_code != 200:
+        logger.warning("google session exchange failed: HTTP %s", r.status_code)
+        raise ValueError("Google sign-in could not be verified. Please try again.")
+    data = r.json()
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        raise ValueError("Google sign-in returned no verified e-mail.")
+    return {"email": email, "name": data.get("name"), "picture": data.get("picture")}

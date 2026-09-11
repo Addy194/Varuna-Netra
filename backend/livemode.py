@@ -110,6 +110,7 @@ async def system_health() -> dict:
     last_ais = await db.ais_positions.find_one({"source": "AISStream"}, {"_id": 0, "timestamp": 1, "mmsi": 1}, sort=[("timestamp", -1)])
     day = datetime.now(timezone.utc) - timedelta(hours=24)
     return {"checked_at": datetime.now(timezone.utc), "uptime_s": int(time.time() - STARTED_AT), "database": {"online": db_ok}, "sentinel_stac": await stac_online(),
+            "authentication": __import__("google_auth").capabilities()["authentication"],
             "ais": await ais_status_public(), "ml_inference": ml, "last_scene": last_scene, "last_ais": last_ais, "data_mode": await data_mode(),
             "last_24h": {"scenes_registered": await db.scenes.count_documents({"created_at": {"$gte": day}}), "detections": await db.cases.count_documents({"created_at": {"$gte": day}}),
                          "alerts": await db.alerts.count_documents({"created_at": {"$gte": day}}), "jobs": await db.jobs.count_documents({"created_at": {"$gte": day}})},
@@ -146,7 +147,9 @@ async def provenance(case_id: str) -> dict:
                           "analysis_asset": att.get("analysis_asset_key"), "stac_href": (scene or {}).get("storage_ref") if real_s1 else None,
                           "badge": "REAL SENTINEL-1" if real_s1 else ("DEMO" if is_demo else ("UNAVAILABLE" if not scene else "EXTERNAL")),
                           "status": "LATEST AVAILABLE ACQUISITION (archive, not real-time)" if real_s1 else ("no Sentinel scene attached — SAR confirmation pending" if not scene else None)},
-            "detection": {"source": spill.get("source"), "model": spill.get("processing_version"), "confidence": spill.get("detection_confidence"), "badge": det_badge,
+            "detection": {"source": spill.get("source"), "model": spill.get("processing_version"), "confidence": spill.get("detection_confidence") if det_badge == "EXPERIMENTAL" else None,
+                          "confidence_source": "detector" if det_badge == "EXPERIMENTAL" else "registrant_supplied",
+                          "confidence_note": None if det_badge == "EXPERIMENTAL" else "N/A — value supplied at registration by the analyst/API caller, not produced by a detector", "badge": det_badge,
                           "type": "heuristic SAR dark-spot detector (OpenCV) — experimental" if det_badge == "EXPERIMENTAL" else ("analyst / API-registered polygon" if det_badge == "ANALYST" else det_badge.lower()),
                           "validation": "MODEL ACCURACY NOT YET VALIDATED AGAINST A LABELLED BENCHMARK DATASET"},
             "ais": {"provider": "AISStream" if ais_mode == "LIVE" else (", ".join(ais_src) or "none"), "mode": ais_mode, "status": await ais_status_public(), "observations": (result or {}).get("position_count", 0), "badge": ais_mode if ais_mode != "NONE" else "UNAVAILABLE",
@@ -156,4 +159,4 @@ async def provenance(case_id: str) -> dict:
                              "resolved_at": case.get("jurisdiction_resolved_at"), "note": "geographic intersection with a reference boundary — not a legal determination" if zone_doc else "no reference maritime zone intersects (high seas or zone not imported)"},
             "analysis": {"algorithm": (result or {}).get("algorithm_version"), "version": (result or {}).get("version"), "analysed_at": (result or {}).get("created_at"), "input_hash": (result or {}).get("input_hash"),
                          "candidates": len((result or {}).get("candidates", [])), "degraded": (result or {}).get("degraded"), "weights": ((result or {}).get("params") or {}).get("weights")},
-            "data_mode": "DEMO" if is_demo else ("REFERENCE" if case.get("origin") == "imported" else "LIVE")}
+            "data_mode": "DEMO" if is_demo else {"detector": "LIVE DETECTED", "analyst": "ANALYST CREATED", "imported": "IMPORTED HISTORICAL"}.get(case.get("origin"), "REFERENCE")}

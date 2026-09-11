@@ -157,6 +157,20 @@ async def create_role_request(body: RoleRequestCreate, request: Request, user=De
            "reason": body.reason, "status": "pending", "requested_at": now}
     await db.role_requests.insert_one(dict(doc))
     await audit("role_request", doc["id"], "role_request.submitted", {"requested_role": body.requested_role}, user["email"])
+    try:
+        if await email_configured():
+            admins = await db.users.find({"role": "admin", "active": True}).to_list(20)
+            html = (f"<div style='font-family:Arial,sans-serif;padding:20px;background:#0A0E17;color:#F8FAFC'>"
+                    f"<h2 style='margin:0 0 12px'>Varuna <span style='color:#00F0FF'>Netra</span> — access request</h2>"
+                    f"<p style='color:#CBD5E1;font-size:14px;line-height:20px'><b>{user.get('name') or user['email']}</b> ({user['email']}) "
+                    f"requested <b style='text-transform:uppercase'>{body.requested_role}</b> access.</p>"
+                    f"<p style='color:#94A3B8;font-size:13px'>Organization: {body.organization or '—'}<br/>Reason: {body.reason or '—'}</p>"
+                    f"<p style='color:#94A3B8;font-size:12px'>Review it in Users &amp; Roles → Elevated access requests. No access is granted until you approve.</p></div>")
+            for a in admins:
+                if a.get("email"):
+                    await send_email(a["email"], f"Varuna Netra — {body.requested_role} access request from {user['email']}", html)
+    except Exception:  # noqa: BLE001 — notification is best-effort; the request is already persisted and visible to admins
+        logger.exception("role-request admin notification failed")
     return clean(doc)
 
 

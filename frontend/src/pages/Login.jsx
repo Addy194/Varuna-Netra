@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, Link } from "react-router-dom";
-import { Radar, LogIn, ShieldCheck, Compass } from "lucide-react";
+import { Radar, LogIn, Compass, Play, Satellite, Waypoints, Lightbulb, FileCheck2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { api, apiError } from "@/lib/api";
@@ -11,6 +11,13 @@ const DEMO = [
 ];
 const DEMO_PASSWORDS = {}; // never ship passwords in the bundle — demo buttons only pre-fill the e-mail
 
+const STEPS = [
+  { icon: Satellite, title: "Detect", body: "Sentinel imagery flags potential oil-spill candidates." },
+  { icon: Waypoints, title: "Correlate", body: "Nearby AIS vessel tracks are compared spatially and temporally." },
+  { icon: Lightbulb, title: "Explain", body: "\u201cWhy This Vessel\u201d shows the actual scoring factors." },
+  { icon: FileCheck2, title: "Verify", body: "Jurisdiction, provenance and an evidence timeline support review." },
+];
+
 export default function Login() {
   const { user, login, guestLogin } = useAuth();
   const nav = useNavigate();
@@ -20,14 +27,16 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [exploreBusy, setExploreBusy] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
   const [caps, setCaps] = useState(null);
   const [error, setError] = useState("");
+  const postLoginDest = useRef(null);
 
   useEffect(() => { api.get("/auth/capabilities").then((r) => setCaps(r.data)).catch(() => setCaps(null)); }, []);
   const googleReady = caps?.authentication?.google?.enabled === true;
   const showDemo = caps?.demo_mode === true;
 
-  if (user) return <Navigate to={loc.state?.from || "/"} replace />;
+  if (user) return <Navigate to={postLoginDest.current || loc.state?.from || "/"} replace />;
 
   const googleSignIn = () => {
     if (googleBusy) return;
@@ -35,6 +44,14 @@ export default function Login() {
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
     const redirectUrl = window.location.origin + "/";
     window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
+  const startDemo = async () => {
+    if (demoBusy) return;
+    setDemoBusy(true); setError("");
+    postLoginDest.current = "/demo";
+    try { await guestLogin(); }
+    catch (err) { postLoginDest.current = null; setError(apiError(err)); setDemoBusy(false); }
   };
 
   const explore = async () => {
@@ -55,40 +72,65 @@ export default function Login() {
   };
 
   return (
-    <div className="grid h-screen grid-cols-1 lg:grid-cols-[1.1fr_1fr]" style={{ background: "var(--bg-primary)" }} data-testid="login-page">
+    <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[1.15fr_1fr]" style={{ background: "var(--bg-primary)" }} data-testid="login-page">
+      {/* HERO / EXPLAINER */}
       <div className="hidden lg:flex flex-col justify-between p-12 grid-bg border-r" style={{ borderColor: "var(--border-default)" }}>
         <div className="flex items-center gap-2.5">
           <span className="grid h-9 w-9 place-items-center rounded-md" style={{ background: "rgba(0,240,255,0.12)", border: "1px solid rgba(0,240,255,0.4)" }}><Radar size={18} color="#00F0FF" /></span>
           <span className="font-display text-xl font-bold tracking-tight">Varuna <span style={{ color: "#00F0FF" }}>Netra</span></span>
         </div>
-        <div className="max-w-lg fade-up">
-          <p className="label-mono mb-3">Authority console · restricted</p>
-          <h1 className="font-display text-4xl font-extrabold tracking-tight lg:text-5xl leading-[1.05]">Satellite spill detection, AIS correlation, auditable decisions.</h1>
-          <p className="mt-5 text-sm leading-relaxed text-slate-400">Every ingestion, correlation run, review and export is signed with your identity and written to an immutable audit trail. Output is decision support — never a legal determination of responsibility.</p>
+        <div className="max-w-xl fade-up">
+          <p className="label-mono mb-3" style={{ color: "#00F0FF" }}>AI-Assisted Maritime Oil-Spill Intelligence</p>
+          <h1 className="font-display text-4xl font-extrabold tracking-tight lg:text-5xl leading-[1.05]">Detect spills. Correlate vessels. Explain the evidence.</h1>
+          <p className="mt-5 text-sm leading-relaxed text-slate-400">Detect potential marine oil spills using satellite imagery, correlate nearby vessels using AIS data, analyze jurisdiction, and review explainable evidence.</p>
+          <div className="mt-8 grid grid-cols-2 gap-3" data-testid="what-it-does">
+            {STEPS.map((s, i) => {
+              const Icon = s.icon;
+              return (
+                <div key={s.title} className="rounded-lg border p-4 fade-up" style={{ borderColor: "var(--border-default)", background: "rgba(22,32,50,0.5)", animationDelay: `${i * 60}ms` }}>
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="grid h-7 w-7 place-items-center rounded" style={{ background: "rgba(0,240,255,0.1)", border: "1px solid rgba(0,240,255,0.3)" }}><Icon size={14} color="#00F0FF" /></span>
+                    <span className="font-mono text-xs font-semibold uppercase tracking-wider text-slate-200">{s.title}</span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-slate-400">{s.body}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[11px] text-slate-500"><ShieldCheck size={12} /> Role-based access · JWT sessions · bcrypt credentials</div>
+        <div className="font-mono text-[11px] uppercase tracking-wider text-slate-500">Decision support · not a legal determination</div>
       </div>
-      <div className="flex items-center justify-center p-8">
+
+      {/* AUTH CARD */}
+      <div className="flex items-center justify-center p-6 sm:p-8">
         <form onSubmit={submit} className="panel w-full max-w-md p-8 fade-up" data-testid="login-form">
           <h2 className="font-display text-2xl font-bold tracking-tight">Varuna Netra</h2>
-          <p className="mt-1 text-xs text-slate-400">Maritime oil-spill intelligence · satellite + AIS decision support.</p>
-          <button type="button" data-testid="explore-guest-button" onClick={explore} disabled={exploreBusy}
-            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded border px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-50" style={{ borderColor: "rgba(0,240,255,0.4)" }}>
-            <Compass size={14} /> {exploreBusy ? "Entering…" : "Explore Varuna Netra (read-only)"}
+          <p className="mt-1 text-xs text-slate-400">AI-assisted maritime oil-spill intelligence — start with the demo, no account needed.</p>
+
+          <button type="button" data-testid="start-sih-demo-button" onClick={startDemo} disabled={demoBusy}
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded bg-cyan-400 px-4 py-3 font-mono text-xs font-bold uppercase tracking-wider text-slate-950 shadow-[0_0_24px_rgba(0,240,255,0.25)] hover:bg-cyan-300 disabled:opacity-50">
+            <Play size={15} /> {demoBusy ? "Loading demo…" : "Start SIH Demo"}
           </button>
-          <div className="mt-5 flex items-center gap-3"><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /><span className="label-mono">or sign in</span><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /></div>
-          <label className="mt-6 block"><span className="label-mono mb-1 block">Email</span>
+          <button type="button" data-testid="explore-guest-button" onClick={explore} disabled={exploreBusy}
+            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded border px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-50" style={{ borderColor: "rgba(0,240,255,0.4)" }}>
+            <Compass size={14} /> {exploreBusy ? "Entering…" : "Explore as Guest (read-only)"}
+          </button>
+
+          <div className="mt-6 flex items-center gap-3"><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /><span className="label-mono">or sign in</span><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /></div>
+
+          <label className="mt-5 block"><span className="label-mono mb-1 block">Email</span>
             <input data-testid="login-email-input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required
               className="w-full rounded border bg-slate-900/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/60" style={{ borderColor: "var(--border-highlight)" }} /></label>
           <label className="mt-3 block"><span className="label-mono mb-1 block">Password</span>
             <input data-testid="login-password-input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required
               className="w-full rounded border bg-slate-900/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/60" style={{ borderColor: "var(--border-highlight)" }} /></label>
           {error && <p data-testid="login-error" className="mt-3 rounded px-3 py-2 text-xs" style={{ color: "#FF2A6D", background: "rgba(255,42,109,0.1)", border: "1px solid rgba(255,42,109,0.4)" }}>{error}</p>}
-          <button data-testid="login-submit-button" disabled={busy} type="submit" className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded bg-cyan-400 px-4 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-slate-950 hover:bg-cyan-300 disabled:opacity-50">
+          <button data-testid="login-submit-button" disabled={busy} type="submit" className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded border px-4 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-slate-100 hover:bg-slate-800/60 disabled:opacity-50" style={{ borderColor: "var(--border-highlight)" }}>
             <LogIn size={14} /> {busy ? "Signing in…" : "Sign in"}
           </button>
           <Link to="/forgot-password" data-testid="forgot-password-link" className="mt-3 block text-center font-mono text-[11px] uppercase tracking-wider text-slate-400 hover:text-cyan-300">Forgot password?</Link>
           <Link to="/signup" data-testid="create-account-link" className="mt-2 block text-center font-mono text-[11px] uppercase tracking-wider text-cyan-300 hover:text-cyan-200">Create account — free Viewer access</Link>
+
           {googleReady && (
             <div className="mt-5" data-testid="google-signin-block">
               <div className="flex items-center gap-3"><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /><span className="label-mono">or</span><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /></div>
@@ -100,6 +142,7 @@ export default function Login() {
               <p className="mt-2 text-center text-[10px] text-slate-500">New Google users get read-only Viewer access. Existing accounts keep their role.</p>
             </div>
           )}
+
           {showDemo && <div className="mt-6 border-t pt-4" style={{ borderColor: "var(--border-default)" }}>
             <p className="label-mono mb-2">Demo accounts</p>
             <div className="space-y-1.5">

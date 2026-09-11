@@ -266,3 +266,8 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - `seed_archive()` made idempotent per-entry (inserts any SEED name missing from the DB on startup) so new seed incidents appear on existing preview/production DBs after restart/redeploy without manual scripts.
 - Fixed archive search bug: fuzzy `WRatio` rejected short substring queries against long text (e.g. "elsa"/"kochi" returned nothing). Added substring boost (score→90 when query is a substring of the searchable text). Verified: elsa/kochi/kerala all match; vault renders 20 reconstructed frames + evidence; Archive UI displays entry cleanly.
 - Note: appears in preview now; reaches production on next backend redeploy (idempotent seed runs at startup).
+
+## 2026-06 — More recent Indian incidents + precedent link verified
+- Added 3 more web-verified Indian incidents to the archive (SEED + VAULT, cited public sources): **MV Wan Hai 503 fire off Kerala/Beypore (2025-06-09)**, **2010 Mumbai oil spill — MSC Chitra × MV Khalijia III (2010-08-07)**, **MV Rak Carrier sinking off Mumbai (2011-08-04)**. Archive now has 16 incidents (6 Indian). Search verified (rak/chitra/mumbai/beypore); at-risk vs spilled volumes labelled truthfully; Wan Hai position marked approximate (drifting).
+- **Precedent link is automatic** (existing `GET /cases/{id}/precedents`): verified on nearest Kerala/Arabian-Sea case SPL-20260910-092 → MSC ELSA 3 surfaces at 232 km (sim 0.732), Wan Hai 503 (450 km) and Rak Carrier also ranked. No code change needed — new archive entries are picked up automatically.
+- Still user-side: frontend redeploy (title/favicon/archive live) and pinning a production reference case for Run SIH Demo.

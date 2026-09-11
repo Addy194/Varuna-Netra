@@ -1,10 +1,45 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { BookOpen, Plus } from "lucide-react";
+import { BookOpen, Plus, List, MapPin } from "lucide-react";
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet";
 import { api, apiError, fmtTime, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { ArchiveLessons } from "@/components/archive/ArchiveLessons";
+
+const FitBounds = ({ pts }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (pts.length) { try { map.fitBounds(pts.map((p) => [p.lat, p.lon]), { padding: [40, 40], maxZoom: 6 }); } catch { /* ignore */ } }
+  }, [pts, map]);
+  return null;
+};
+
+const ArchiveMap = ({ rows }) => (
+  <div className="panel overflow-hidden" style={{ height: "70vh" }} data-testid="archive-map">
+    {rows.length === 0 ? (
+      <div className="grid h-full place-items-center font-mono text-xs text-slate-500" data-testid="archive-map-empty">No incidents with valid coordinates to plot</div>
+    ) : (
+      <MapContainer center={[12, 74]} zoom={4} worldCopyJump style={{ height: "100%", width: "100%", background: "#0b1220" }}>
+        <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" attribution="Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics" />
+        <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}" />
+        {rows.map((r) => (
+          <CircleMarker key={r.id} center={[r.lat, r.lon]} radius={7} pathOptions={{ color: "#38BDF8", fillColor: "#38BDF8", fillOpacity: 0.6, weight: 1.5 }}>
+            <Popup>
+              <div style={{ minWidth: 190 }}>
+                <b>{r.name}</b><br />
+                {fmtTime(r.date).slice(0, 10)} · {r.country}<br />
+                {r.lat}, {r.lon} · {r.volume_tonnes?.toLocaleString?.() ?? r.volume_tonnes} t · {r.oil_type}<br />
+                <Link to={`/archive/${r.id}`} data-testid={`archive-map-open-${r.id}`}>Open case file →</Link>
+              </div>
+            </Popup>
+          </CircleMarker>
+        ))}
+        <FitBounds pts={rows} />
+      </MapContainer>
+    )}
+  </div>
+);
 
 const inputCls = "w-full rounded border bg-slate-900/60 px-2.5 py-1.5 font-mono text-xs text-slate-100 outline-none focus:border-cyan-400/60";
 const bd = { borderColor: "var(--border-highlight)" };
@@ -16,7 +51,9 @@ export default function Archive() {
   const [rows, setRows] = useState([]);
   const [f, setF] = useState(empty);
   const [showForm, setShowForm] = useState(false);
+  const [view, setView] = useState("list");
   const q = sp.get("q") || "";
+  const geo = useMemo(() => rows.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lon)), [rows]);
   const load = useCallback(() => api.get("/archive", { params: { q } }).then((r) => setRows(r.data)).catch((e) => toast.error(apiError(e))), [q]);
   useEffect(() => { load(); }, [load]);
   const create = async () => {
@@ -30,6 +67,10 @@ export default function Archive() {
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <div className="mr-auto"><p className="label-mono mb-1">Historical knowledge base · precedent incidents</p><h1 className="font-display text-3xl font-extrabold tracking-tight">Spill archive</h1></div>
         <input data-testid="archive-search" className={`${inputCls} w-80`} style={bd} value={q} onChange={(e) => { const n = new URLSearchParams(sp); e.target.value ? n.set("q", e.target.value) : n.delete("q"); setSp(n); }} placeholder="search name, country, oil type, cause, ecosystem…" />
+        <div className="flex overflow-hidden rounded border" style={bd} data-testid="archive-view-toggle">
+          <button data-testid="archive-view-list" onClick={() => setView("list")} className={`flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider ${view === "list" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800/60"}`}><List size={12} /> List</button>
+          <button data-testid="archive-view-map" onClick={() => setView("map")} className={`flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider ${view === "map" ? "bg-cyan-400 text-slate-950" : "text-slate-300 hover:bg-slate-800/60"}`}><MapPin size={12} /> Map</button>
+        </div>
         {hasRole(user, "supervisor") && <button data-testid="btn-archive-add" onClick={() => setShowForm(!showForm)} className="inline-flex items-center gap-1.5 rounded bg-cyan-400 px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-950"><Plus size={12} /> Add incident</button>}
       </div>
       <ArchiveLessons />
@@ -40,7 +81,8 @@ export default function Archive() {
           <button data-testid="archive-submit" onClick={create} disabled={f.name.length < 3 || !f.date || f.lat === "" || f.lon === ""} className="col-span-4 rounded bg-cyan-400 px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-950 disabled:opacity-50">Save incident</button>
         </div>
       )}
-      <p className="mb-2 font-mono text-[10px] text-slate-500" data-testid="archive-count">{rows.length} incidents</p>
+      {view === "map" ? <ArchiveMap rows={geo} /> : (<>
+      <p className="mb-2 font-mono text-[10px] text-slate-500" data-testid="archive-count">{rows.length} incidents{geo.length !== rows.length ? ` · ${geo.length} mapped` : ""}</p>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" data-testid="archive-list">
         {rows.map((r) => (
           <article key={r.id} data-testid={`archive-entry-${r.id}`} className="panel p-4 text-xs">
@@ -54,6 +96,7 @@ export default function Archive() {
           </article>
         ))}
       </div>
+      </>)}
     </div>
   );
 }

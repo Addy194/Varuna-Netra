@@ -1,24 +1,13 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Radar, Play, LayoutDashboard, Satellite, ShieldAlert, Users as UsersIcon, LogOut, Map as MapIcon, Eye, Columns2, Globe2, Images, BookOpen, HeartPulse } from "lucide-react";
+import { Outlet, useNavigate, NavLink } from "react-router-dom";
+import { Radar, ShieldAlert, LogOut, Menu } from "lucide-react";
 import { api, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { LiveBell, CriticalBanner } from "@/components/LiveBell";
+import { Sidebar } from "@/components/Sidebar";
 
-const links = [
-  { to: "/", label: "Surveillance", icon: LayoutDashboard, id: "nav-dashboard-link" },
-  { to: "/ingest", label: "Ingestion", icon: Satellite, id: "nav-ingest-link" },
-  { to: "/explorer", label: "Scene Explorer", icon: Globe2, id: "nav-explorer-link" },
-  { to: "/events", label: "Events", icon: Images, id: "nav-events-link" },
-  { to: "/archive", label: "Archive", icon: BookOpen, id: "nav-archive-link" },
-  { to: "/health", label: "Data Sources", icon: HeartPulse, id: "nav-health-link" },
-  { to: "/alerts", label: "Alerts", icon: ShieldAlert, id: "nav-alerts-link" },
-  { to: "/zones", label: "Zones", icon: MapIcon, id: "nav-zones-link" },
-  { to: "/demo", label: "SIH Demo", icon: Play, id: "nav-demo-link" },
-  { to: "/watchlist", label: "Watchlist", icon: Eye, id: "nav-watchlist-link" },
-  { to: "/compare", label: "Compare", icon: Columns2, id: "nav-compare-link" },
-];
 const ROLE_COLOR = { analyst: "#00F0FF", supervisor: "#FFB703", admin: "#FF2A6D" };
+const COLLAPSE_KEY = "vn_sidebar_collapsed";
 
 export const Layout = () => {
   const { user, logout } = useAuth();
@@ -26,6 +15,11 @@ export const Layout = () => {
   const [clock, setClock] = useState(new Date());
   const [stats, setStats] = useState(null);
   const [statsErr, setStatsErr] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; } });
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const toggleCollapse = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem(COLLAPSE_KEY, n ? "1" : "0"); } catch { /* ignore */ } return n; });
+
   useEffect(() => {
     const t = setInterval(() => setClock(new Date()), 1000);
     const load = () => api.get("/dashboard/summary").then((r) => { setStats(r.data); setStatsErr(false); }).catch(() => setStatsErr(true));
@@ -39,26 +33,14 @@ export const Layout = () => {
   return (
     <div className="flex h-screen flex-col overflow-hidden text-slate-100" style={{ background: "var(--bg-primary)" }}>
       <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4" style={{ borderColor: "var(--border-default)", background: "rgba(17,24,39,0.85)", backdropFilter: "blur(12px)" }}>
+        <button data-testid="mobile-menu-button" onClick={() => setMobileOpen(true)} className="rounded p-1.5 text-slate-300 hover:bg-slate-800 md:hidden"><Menu size={18} /></button>
         <NavLink to="/" data-testid="nav-brand" className="flex shrink-0 items-center gap-2.5">
           <span className="grid h-8 w-8 place-items-center rounded-md" style={{ background: "rgba(0,240,255,0.12)", border: "1px solid rgba(0,240,255,0.4)" }}>
             <Radar size={16} color="#00F0FF" />
           </span>
           <span className="whitespace-nowrap font-display text-lg font-bold tracking-tight">Varuna <span style={{ color: "#00F0FF" }}>Netra</span></span>
         </NavLink>
-        <nav className="flex flex-1 min-w-0 items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
-          {links.map(({ to, label, icon: Icon, id }) => (
-            <NavLink key={to} to={to} end={to === "/"} data-testid={id}
-              className={({ isActive }) => `flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${isActive ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"}`}>
-              <Icon size={14} /> {label}
-            </NavLink>
-          ))}
-          {hasRole(user, "admin") && (
-            <NavLink to="/users" data-testid="nav-users-link" className={({ isActive }) => `flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${isActive ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-100"}`}>
-              <UsersIcon size={14} /> Users
-            </NavLink>
-          )}
-        </nav>
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="ml-auto flex shrink-0 items-center gap-4">
           {(stats || statsErr) && (
             <div className="hidden items-center gap-4 xl:flex" title="Real database counts (demo/mock records excluded)">
               <Stat label="Active cases" value={statsErr ? "Unavailable" : stats.active_cases} testId="nav-stat-cases" onClick={() => nav("/?origin=real")} />
@@ -80,7 +62,7 @@ export const Layout = () => {
           <LiveBell />
           {user && (
             <div className="flex items-center gap-2 border-l pl-4" style={{ borderColor: "var(--border-default)" }} data-testid="user-chip">
-              <div className="text-right leading-tight">
+              <div className="hidden text-right leading-tight sm:block">
                 <div className="text-xs text-slate-200" data-testid="user-name">{user.name}</div>
                 <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: ROLE_COLOR[user.role] }} data-testid="user-role">{user.role}</div>
               </div>
@@ -90,9 +72,12 @@ export const Layout = () => {
         </div>
       </header>
       <CriticalBanner />
-      <main className="flex-1 overflow-hidden">
-        <Outlet />
-      </main>
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar collapsed={collapsed} onToggleCollapse={toggleCollapse} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
+        <main className="flex-1 overflow-hidden">
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 };

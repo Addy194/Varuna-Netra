@@ -25,6 +25,7 @@ SEED = [
     ("Amoco Cadiz", "1978-03-16", 48.6, -4.77, 223000, "light crude", "Steering gear failure, grounding at Portsall", "MT Amoco Cadiz", ["Brittany coast (360 km)", "oyster beds", "salt marshes"], ["shoreline scraping", "detergents (later restricted)", "manual removal"], "Detergent use harmed recovery; established case law on liability and led to French POLMAR plan.", "France"),
     ("Torrey Canyon", "1967-03-18", 49.95, -6.4, 119000, "Kuwait crude", "Grounding on Seven Stones reef (navigation)", "SS Torrey Canyon", ["Cornwall & Brittany coasts", "seabirds"], ["first-generation detergents (highly toxic)", "bombing of wreck to burn oil"], "Founding disaster of modern spill response; toxic detergents did more harm than oil; led to CLC 1969 / OPRC.", "United Kingdom"),
     ("X-Press Pearl", "2021-05-20", 7.05, 79.75, 350, "bunker fuel + plastic nurdles + chemicals", "Container fire (nitric acid leak) and sinking off Colombo", "MV X-Press Pearl (container ship)", ["Negombo lagoon", "west Sri Lanka beaches", "fisheries", "turtles & dolphins"], ["nurdle beach cleanup", "booms at lagoon mouths", "fisheries ban", "wreck monitoring"], "Hazardous cargo + plastic pollution compounded oil impacts; multi-hazard response planning needed for container ships.", "Sri Lanka"),
+    ("MSC ELSA 3 — Kochi oil slick", "2025-05-25", 9.3125, 76.136, 451.5, "furnace oil + marine diesel (bunker fuel)", "Container ship developed a 26° starboard list en route Vizhinjam→Kochi and capsized/sank ~38 nm SW of Kochi; bunker fuel released and some hazardous containers (calcium carbide) drifted ashore", "MSC ELSA 3 (IMO 9123221, container ship)", ["Kerala coast (Alappuzha, Kollam, Thiruvananthapuram)", "Arabian Sea fisheries", "backwaters/estuaries", "beaches"], ["Indian Coast Guard aerial oil-slick mapping (Dornier)", "offshore dispersant spraying", "shoreline container & debris recovery", "wreck bunker-oil removal by hot-tapping (completed Oct 2025)"], "Sunken-wreck bunker fuel (~451 t onboard: 367.1 t furnace oil + 84.44 t diesel) is a prolonged pollution risk; hazardous container cargo (calcium carbide reacts with water to release acetylene) compounds the oil hazard; hot-tapping later removed the wreck's oil to eliminate the residual risk. Exact spilled volume was not precisely quantified — figure shown is bunker fuel at risk.", "India"),
 ]
 
 
@@ -35,9 +36,10 @@ def _doc(row, actor="seed"):
 
 
 async def seed_archive():
-    if await db.historical_spills.count_documents({"source": "seed"}):
-        return
-    await db.historical_spills.insert_many([_doc(r) for r in SEED])
+    existing = {r["name"] for r in await db.historical_spills.find({"source": "seed"}, {"_id": 0, "name": 1}).to_list(500)}
+    missing = [_doc(r) for r in SEED if r[0] not in existing]
+    if missing:
+        await db.historical_spills.insert_many(missing)
     await db.historical_spills.create_index([("location", "2dsphere")])
 
 
@@ -45,7 +47,14 @@ async def seed_archive():
 async def list_archive(q: str = Query("", max_length=80), limit: int = Query(50, ge=1, le=200), user=Depends(get_current_user)):
     rows = await db.historical_spills.find({}, {"_id": 0}).sort("date", -1).to_list(500)
     if q.strip():
-        scored = [(fuzz.WRatio(q, f"{r['name']} {r['country']} {r['oil_type']} {r['cause']} {r['vessel_facility']} {' '.join(r['ecosystems'])}"), r) for r in rows]
+        ql = q.strip().lower()
+        scored = []
+        for r in rows:
+            hay = f"{r['name']} {r['country']} {r['oil_type']} {r['cause']} {r['vessel_facility']} {' '.join(r['ecosystems'])}"
+            s = fuzz.WRatio(q, hay)
+            if ql in hay.lower():  # substring match (e.g. "elsa", "kochi") — boost above the fuzzy threshold
+                s = max(s, 90)
+            scored.append((s, r))
         rows = [r for s, r in sorted(scored, key=lambda x: -x[0]) if s >= 50]
     return clean(rows[:limit])
 

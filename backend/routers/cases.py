@@ -31,6 +31,93 @@ async def _result(case_id, version: Optional[int]):
     return await db.correlation_results.find_one(q, {"_id": 0}, sort=[("version", -1)])
 
 
+@router.get("/demo/reference")
+async def get_reference_case(user=Depends(get_current_user)):
+    """The admin-pinned SIH reference case. Never falls back to an arbitrary case."""
+    pin = await db.settings.find_one({"key": "sih_reference_case"}, {"_id": 0})
+    if not pin:
+        return {"pinned": False, "available": False, "state": "REFERENCE CASE NOT PINNED", "case_id": None}
+    case = await db.cases.find_one({"id": pin["case_id"]}, {"_id": 0, "id": 1, "case_number": 1, "origin": 1, "origin_label": 1})
+    return clean({"pinned": True, "available": bool(case), "state": "REFERENCE CASE — STORED DATA" if case else "REFERENCE CASE UNAVAILABLE", "case_id": pin["case_id"],
+                  "case_number": (case or {}).get("case_number") or pin.get("case_number"), "origin": (case or {}).get("origin"), "pinned_by": pin.get("pinned_by"), "pinned_at": pin.get("pinned_at")})
+
+
+@router.put("/demo/reference/{case_id}")
+async def pin_reference_case(case_id: str, user=Depends(require_role("admin"))):
+    case = await _case(case_id)
+    doc = {"key": "sih_reference_case", "case_id": case_id, "case_number": case["case_number"], "pinned_by": user["email"], "pinned_at": datetime.now(timezone.utc)}
+    await db.settings.update_one({"key": "sih_reference_case"}, {"$set": doc}, upsert=True)
+    await audit("settings", "sih_reference_case", "demo.reference_pinned", {"case_id": case_id, "case_number": case["case_number"]}, user["email"])
+    return await get_reference_case(user)
+
+
+@router.delete("/demo/reference")
+async def unpin_reference_case(user=Depends(require_role("admin"))):
+    await db.settings.delete_one({"key": "sih_reference_case"})
+    await audit("settings", "sih_reference_case", "demo.reference_unpinned", {}, user["email"])
+    return {"pinned": False}
+
+
+@router.post("/cases/analyze-eligible", status_code=202)
+async def analyze_eligible(limit: int = Query(200, le=1000), user=Depends(require_role("supervisor"))):
+    """Queue correlation ONLY for real cases that have never been analysed AND have the inputs a run needs; the rest are tagged NOT ANALYZABLE with the reason. Idempotent — existing results are never re-run or overwritten."""
+    from dashboard import REAL_CASE_FILTER, analyzability
+    rows = await db.cases.find({**REAL_CASE_FILTER, "$or": [{"latest_result_version": {"$in": [0, None]}}, {"latest_result_version": {"$exists": False}}]}, {"_id": 0, "id": 1, "case_number": 1, "spill_observation_id": 1}).sort("acquisition_time", -1).to_list(limit)
+    queued, skipped = [], []
+    for c in rows:
+        if await db.jobs.find_one({"type": "correlate", "payload.case_id": c["id"], "status": {"$in": ["queued", "running"]}}, {"_id": 1}):
+            continue
+        reason = await analyzability(db, c)
+        if reason:
+            await db.cases.update_one({"id": c["id"]}, {"$set": {"not_analyzable_reason": reason, "analyzability_checked_at": datetime.now(timezone.utc)}})
+            skipped.append({"case_number": c["case_number"], "reason": reason})
+            continue
+        await db.cases.update_one({"id": c["id"]}, {"$unset": {"not_analyzable_reason": ""}})
+        job = await enqueue("correlate", {"case_id": c["id"], "params": {}, "fetch_environment": False}, user["email"])
+        queued.append({"case_number": c["case_number"], "job_id": job["id"]})
+    await audit("cases", "batch", "cases.analyze_eligible", {"queued": len(queued), "skipped": len(skipped)}, user["email"])
+    return clean({"candidates_checked": len(rows), "queued": queued, "skipped": skipped})
+
+
+@router.get("/cases/{case_id}/evidence-timeline")
+async def evidence_timeline(case_id: str, user=Depends(get_current_user)):
+    """Chronological events built ONLY from stored timestamps (scene, spill, top-candidate track, correlation, reviews, case). Missing events are listed as unavailable — never invented."""
+    case = await _case(case_id)
+    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "acquisition_time": 1, "created_at": 1, "source": 1, "processing_version": 1})
+    scene = await db.scenes.find_one({"id": case["scene_id"]}, {"_id": 0, "acquisition_time": 1, "provider_scene_id": 1}) if case.get("scene_id") else None
+    result = await db.correlation_results.find_one({"case_id": case_id}, {"_id": 0, "created_at": 1, "version": 1, "overall_status": 1, "candidates": {"$slice": 1}}, sort=[("version", -1)])
+    reviews = await db.reviews.find({"case_id": case_id}, {"_id": 0, "created_at": 1, "decision": 1, "analyst": 1}).sort("created_at", 1).to_list(50)
+    ev, missing = [], []
+    def add(kind, label, t, detail=None, source=None):
+        if t is None:
+            missing.append({"kind": kind, "label": label, "state": "Not available"})
+        else:
+            ev.append({"kind": kind, "label": label, "time": t, "detail": detail, "source": source})
+    add("scene_acquisition", "Sentinel-1 acquisition", (scene or {}).get("acquisition_time"), (scene or {}).get("provider_scene_id"), "scenes")
+    add("detection", "Spill candidate detected / registered", (spill or {}).get("created_at"), f"{(spill or {}).get('source')} · {(spill or {}).get('processing_version')}", "spill_observations")
+    top = (result or {}).get("candidates") or []
+    if top:
+        t = top[0]
+        track = [f for f in t.get("track") or [] if not f.get("interpolated")]
+        name = t.get("vessel_name") or f"MMSI {t['mmsi']}"
+        add("corridor_entry", f"AIS corridor entry — {name}", track[0]["timestamp"] if track else None, f"{len(track)} real AIS fixes", "ais_positions")
+        add("closest_approach", f"Closest approach — {name}", (t.get("evidence") or {}).get("closest_fix", {}).get("timestamp"), f"{(t.get('evidence') or {}).get('distance_km')} km · score {t.get('score')}", "correlation_results")
+        add("corridor_exit", f"AIS corridor exit — {name}", track[-1]["timestamp"] if len(track) > 1 else None, None, "ais_positions")
+    else:
+        for k, l in (("corridor_entry", "AIS corridor entry"), ("closest_approach", "Closest vessel approach"), ("corridor_exit", "AIS corridor exit")):
+            missing.append({"kind": k, "label": l, "state": "Not available — no AIS candidate" if result else "Not available — not analysed"})
+    add("correlation", f"Correlation run v{(result or {}).get('version')}" if result else "Correlation run", (result or {}).get("created_at"), (result or {}).get("overall_status"), "correlation_results")
+    for r in reviews:
+        add("review", f"Analyst review — {r.get('decision')}", r.get("created_at"), r.get("analyst"), "reviews")
+    if not reviews:
+        missing.append({"kind": "review", "label": "Analyst review", "state": "Not available — no decision recorded"})
+    add("case_created", "Case opened", case.get("created_at"), case.get("case_number"), "cases")
+    if case.get("updated_at") and case.get("updated_at") != case.get("created_at"):
+        add("case_updated", "Case last updated", case.get("updated_at"), None, "cases")
+    ev.sort(key=lambda e: to_utc(e["time"]))
+    return clean({"case_id": case_id, "case_number": case["case_number"], "events": ev, "unavailable": missing, "note": "every timestamp is read from stored records; nothing is estimated"})
+
+
 @router.get("/cases")
 async def list_cases(status: Optional[str] = None, attribution_status: Optional[str] = None, review_state: Optional[str] = None, origin: str = "real", include_demo: bool = False,
                      limit: int = Query(200, le=1000), user=Depends(get_current_user)):

@@ -4,6 +4,7 @@ import { Play, ChevronRight, ChevronLeft, Satellite, Waves, Radio, Ship, Scale, 
 import { api, fmtTime } from "@/lib/api";
 import { CandidatesTable } from "@/components/case/CandidatesTable";
 import { Provenance } from "@/components/case/Provenance";
+import { ChronoTimeline } from "@/components/case/ChronoTimeline";
 
 const fmtDiff = (h) => (h == null ? "—" : `${Math.floor(h)} h ${String(Math.round((h % 1) * 60)).padStart(2, "0")} min`);
 const Row = ({ k, v, testid }) => <div className="flex justify-between gap-3 border-b border-dashed py-1 font-mono text-[11px]" style={{ borderColor: "var(--border-default)" }}><span className="text-slate-500">{k}</span><span className="text-right text-slate-100" data-testid={testid}>{v ?? "UNAVAILABLE"}</span></div>;
@@ -19,17 +20,15 @@ export default function SihDemo() {
   const load = async () => {
     setErr(null);
     try {
-      const [aoi, summary, ais] = await Promise.all([api.get("/aoi"), api.get("/dashboard/summary"), api.get("/ais/status")]);
-      const all = (await api.get("/cases?origin=all&limit=1000")).data.filter((c) => c.scene_id && c.centroid);
-      const inIndia = (c) => c.centroid.coordinates[0] > 66 && c.centroid.coordinates[0] < 95 && c.centroid.coordinates[1] > 5 && c.centroid.coordinates[1] < 24;
-      const cases = [...all.filter(inIndia), ...all.filter((c) => !inIndia(c))];
-      const withResult = [];
-      for (const c of cases.slice(0, 200)) { const r = await api.get(`/cases/${c.id}/candidates`).catch(() => ({ data: {} })); const list = Array.isArray(r.data) ? r.data : (r.data?.candidates || []); if (list.length) { withResult.push({ c, cands: list }); break; } }
-      const pick = withResult[0] || { c: cases[0], cands: [] };
-      if (!pick.c) throw new Error("No stored case with a real Sentinel-1 scene exists in the Arabian Sea preset yet — run a scene search / detection first.");
-      const full = (await api.get(`/cases/${pick.c.id}`)).data;
-      const geo = (await api.get(`/cases/${pick.c.id}/geojson`)).data;
-      setD({ aoi: aoi.data, summary: summary.data, ais: ais.data, c: full, cands: pick.cands, geo, hasResult: withResult.length > 0 });
+      const [aoi, summary, ais, ref] = await Promise.all([api.get("/aoi"), api.get("/dashboard/summary"), api.get("/ais/status"), api.get("/demo/reference")]);
+      if (!ref.data.pinned) throw new Error("REFERENCE CASE NOT PINNED — an administrator must open a stored case and choose “Pin as SIH reference case”. The demo never picks an arbitrary case.");
+      if (!ref.data.available) throw new Error(`REFERENCE CASE UNAVAILABLE — pinned case ${ref.data.case_number || ref.data.case_id} no longer exists. An administrator must pin a replacement case.`);
+      const full = (await api.get(`/cases/${ref.data.case_id}`)).data;
+      const r = await api.get(`/cases/${ref.data.case_id}/candidates`).catch(() => ({ data: {} }));
+      const cands = Array.isArray(r.data) ? r.data : (r.data?.candidates || []);
+      const geo = (await api.get(`/cases/${ref.data.case_id}/geojson`)).data;
+      const timeline = (await api.get(`/cases/${ref.data.case_id}/evidence-timeline`).catch(() => ({ data: null }))).data;
+      setD({ aoi: aoi.data, summary: summary.data, ais: ais.data, c: full, cands, geo, ref: ref.data, timeline, hasResult: cands.length > 0 });
     } catch (e) { setErr(e?.response?.data?.detail || e.message); }
   };
   useEffect(() => { load(); }, []);
@@ -37,8 +36,8 @@ export default function SihDemo() {
   const steps = d ? [
     { t: "Problem", icon: Globe2, body: <>
       <p className="text-sm text-slate-200">Oil discharges at sea are rarely witnessed. Varuna Netra combines <b>real Sentinel-1 SAR acquisitions</b>, <b>real AIS vessel telemetry</b> and explainable space-time correlation so an operator can rank <i>candidate</i> vessels and open an evidence-backed case — anywhere in the world.</p>
-      <div className="mt-3 grid gap-x-6 sm:grid-cols-2"><Row k="live cases (real, open)" v={d.summary.live_cases} testid="demo-live-cases" /><Row k="pending analyst review" v={d.summary.pending_review} /><Row k="AIS fixes indexed" v={d.summary.ais_fixes_indexed} /><Row k="imported / demo records excluded" v={`${d.summary.demo.imported} / ${d.summary.demo.cases}`} /></div>
-      <p className="mt-3 font-mono text-[10px] text-amber-300" data-testid="demo-reference-label">REFERENCE CASE — STORED DATA · {d.c.case_number} · {d.c.origin_label}. Nothing on this walkthrough is simulated; values are read from the database and provider catalogues.</p></> },
+      <div className="mt-3 grid gap-x-6 sm:grid-cols-2"><Row k="active cases (real, open)" v={d.summary.active_cases} testid="demo-live-cases" /><Row k="pending analyst review" v={d.summary.pending_review} /><Row k="AIS fixes indexed" v={d.summary.ais_fixes_indexed} /><Row k="imported / demo records excluded" v={`${d.summary.demo.imported} / ${d.summary.demo.cases}`} /></div>
+      <p className="mt-3 font-mono text-[10px] text-amber-300" data-testid="demo-reference-label">REFERENCE CASE — STORED DATA · {d.c.case_number} · {d.c.origin_label} · pinned by {d.ref.pinned_by}. Nothing on this walkthrough is simulated; values are read from the database and provider catalogues.</p></> },
     { t: "AOI", icon: Globe2, body: <>
       <Row k="preset" v={d.aoi.aoi ? `${d.aoi.aoi.name} (${d.aoi.aoi.provenance})` : "none selected — SIH preset: Mumbai / Arabian Sea"} testid="demo-aoi" /><Row k="Sentinel bbox" v={d.aoi.aoi ? d.aoi.aoi.bbox.map((x) => x.toFixed(2)).join(", ") : d.aoi.presets.sih_mumbai.bbox.join(", ")} /><Row k="AIS coverage boxes" v={d.aoi.aoi ? d.aoi.aoi.ais_bboxes_swne.length : d.ais.coverage_bbox?.length} />
       <p className="mt-2 text-xs text-slate-400">Any zone or drawn polygon worldwide drives the same pipeline; India/Mumbai is only the SIH preset. Reference zones: Marine Regions v12 (CC-BY) — REFERENCE, not legal authority.</p></> },
@@ -56,6 +55,7 @@ export default function SihDemo() {
     { t: "Candidate ranking · Why this vessel?", icon: Ship, body: d.cands.length ? <>
       <p className="mb-2 text-xs text-slate-400">Click <b>Why this vessel?</b> to see the six real factors, weights and points from the correlation engine.</p>
       <div className="rounded border" style={{ borderColor: "var(--border-default)" }}><CandidatesTable candidates={d.cands} selected={selected} onSelect={setSelected} /></div></> : <p className="text-xs text-amber-300" data-testid="demo-no-candidates">No AIS candidate vessels were found in this case's space-time corridor — the system reports this truthfully rather than inventing a vessel. Correlation can be re-run once AIS history covers the window.</p> },
+    { t: "Evidence timeline", icon: Fingerprint, body: <div className="-mx-4"><ChronoTimeline caseId={d.c.id} /></div> },
     { t: "Jurisdiction", icon: Scale, body: <>
       <Row k="primary zone" v={d.c.primary_jurisdiction ? `${d.c.primary_jurisdiction.code} · ${d.c.primary_jurisdiction.name}` : "no reference zone intersects (high seas / not imported)"} testid="demo-jurisdiction" /><Row k="authority (reference)" v={d.c.primary_jurisdiction?.authority} /><Row k="all intersecting zones" v={(d.c.jurisdictions || []).map((z) => z.code).join(", ") || null} /><Row k="ICG routing (India, approximate)" v={d.c.icg ? `${d.c.icg.code} · ${d.c.icg.district_hq}` : null} />
       <p className="mt-2 text-[11px] text-slate-500">Geographic intersection with a REFERENCE boundary is context for coordination — not a legal determination of responsibility.</p></> },

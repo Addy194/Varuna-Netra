@@ -61,7 +61,7 @@ export const Layout = () => {
         <div className="ml-auto flex items-center gap-6">
           {(stats || statsErr) && (
             <div className="hidden items-center gap-5 md:flex" title="Real database counts (demo/mock records excluded)">
-              <Stat label="Cases" value={statsErr ? "Unavailable" : stats.live_cases} testId="nav-stat-cases" onClick={() => nav("/?origin=real")} />
+              <Stat label="Active cases" value={statsErr ? "Unavailable" : stats.active_cases} testId="nav-stat-cases" onClick={() => nav("/?origin=real")} />
               <Stat label="Pending" value={statsErr ? "Unavailable" : stats.pending_review} color="#FFB703" testId="nav-stat-pending" onClick={() => nav("/?origin=real&view=pending")} />
               <Stat label="Alerts" value={statsErr ? "Unavailable" : stats.alerts.unread} color="#FF2A6D" icon={<ShieldAlert size={12} />} testId="nav-stat-alerts" onClick={() => nav("/alerts?alerts=unread")} />
               {stats?.demo?.imported > 0 && <Stat label="Imported" value={stats.demo.imported} color="#FFB703" testId="nav-stat-imported" onClick={() => nav("/?origin=imported")} />}

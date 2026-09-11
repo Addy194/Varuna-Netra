@@ -54,6 +54,15 @@ def key_configured() -> bool:
     return bool(os.environ.get("AISSTREAM_API_KEY"))
 
 
+def ingest_enabled() -> bool:
+    """AIS_INGEST_ENABLED=false puts this deployment in STANDBY so it never competes with the production feed for the one-connection-per-key limit."""
+    return os.environ.get("AIS_INGEST_ENABLED", "true").strip().lower() not in ("0", "false", "no")
+
+
+KEY_CONFLICT_REASON = "Another environment/client currently owns this AISStream API key (one connection per key). Production must own the feed; set AIS_INGEST_ENABLED=false on preview or use a separate key."
+STANDBY_DISABLED_REASON = "AIS ingestion disabled on this instance (AIS_INGEST_ENABLED=false) to protect the production live feed."
+
+
 def validate_bbox(south: float, west: float, north: float, east: float) -> list:
     if not (-90 <= south <= 90 and -90 <= north <= 90 and -180 <= west <= 180 and -180 <= east <= 180):
         raise ValueError("coordinates out of range")
@@ -250,8 +259,8 @@ async def _run() -> None:
     while True:
         _reconnect_event.clear()
         key = os.environ.get("AISSTREAM_API_KEY")
-        if os.environ.get("AIS_INGEST_ENABLED", "true").strip().lower() in ("0", "false", "no"):
-            state.update({"connected": False, "subscription_confirmed": False, "socket_open": False, "role": "disabled", "error": "AIS ingestion disabled on this instance (AIS_INGEST_ENABLED=false)"})
+        if not ingest_enabled():
+            state.update({"connected": False, "subscription_confirmed": False, "socket_open": False, "role": "disabled", "error": STANDBY_DISABLED_REASON})
             await _snapshot()
             await asyncio.sleep(30)
             continue
@@ -309,13 +318,13 @@ def stop() -> None:
 
 
 def connection_state() -> str:
-    """NOT_CONFIGURED | CONNECTING | CONNECTED (socket open + subscription accepted, no regional data yet) | LIVE (positions <5 min) | STALE (had data, none for STALE_MIN) | RECONNECTING | OFFLINE | STANDBY."""
+    """NOT_CONFIGURED | STANDBY (ingest disabled or another worker holds the lease) | CONNECTING | CONNECTED (no regional data yet) | LIVE | STALE | RECONNECTING | KEY_CONFLICT | OFFLINE."""
+    if state["role"] == "disabled":
+        return "STANDBY"
     if not key_configured():
         return "NOT_CONFIGURED"
     if state["role"] == "standby":
         return "STANDBY"
-    if state["role"] == "disabled":
-        return "DISABLED"
     now = datetime.now(timezone.utc)
     if state["socket_open"] and state["subscription_confirmed"]:
         if state["last_position_at"] and (now - state["last_position_at"]).total_seconds() < 300 and state["positions"] > 0:
@@ -323,10 +332,10 @@ def connection_state() -> str:
         if state["last_position_at"] and (now - state["last_position_at"]).total_seconds() > STALE_MIN * 60:
             return "STALE"
         return "CONNECTED"
+    if str(state["error"] or "").startswith("KEY_IN_USE_ELSEWHERE"):
+        return "KEY_CONFLICT"
     if state["socket_open"]:
         return "CONNECTING"  # handshake done, waiting ≤5 s for AISStream to accept/reject the subscription
-    if str(state["error"] or "").startswith("KEY_IN_USE_ELSEWHERE"):
-        return "OFFLINE"
     if state["error"] and state["error"] != "API key not configured":
         return "RECONNECTING" if state["last_disconnect_at"] and (now - state["last_disconnect_at"]).total_seconds() < 120 else "OFFLINE"
     if _task and not _task.done() and state["last_connect_attempt"] and (now - state["last_connect_attempt"]).total_seconds() < 15:
@@ -336,20 +345,25 @@ def connection_state() -> str:
 
 def _feed_label(st: str) -> str:
     return {"LIVE": "LIVE", "CONNECTED": "CONNECTED — NO REGIONAL AIS COVERAGE (no positions yet in the selected AOI)", "STALE": "STALE — connected, no positions for >%d min" % STALE_MIN,
-            "CONNECTING": "CONNECTING", "RECONNECTING": "RECONNECTING", "OFFLINE": "OFFLINE", "NOT_CONFIGURED": "UNCONFIGURED", "STANDBY": "STANDBY (another backend worker holds the single AISStream connection)"}.get(st, st)
+            "CONNECTING": "CONNECTING", "RECONNECTING": "RECONNECTING", "OFFLINE": "OFFLINE", "NOT_CONFIGURED": "UNCONFIGURED", "KEY_CONFLICT": "KEY CONFLICT — another environment owns this AISStream key",
+            "STANDBY": "STANDBY — AIS ingestion disabled on this instance" if state["role"] == "disabled" else "STANDBY (another backend worker holds the single AISStream connection)"}.get(st, st)
 
 
 def _status_fields() -> dict:
     st = connection_state()
-    return {"source": SOURCE, "mode": "live", "state": st, "feed": _feed_label(st), "configured": key_configured(), "connected": bool(state["socket_open"] and state["subscription_confirmed"]),
+    from livemode import APP_ENV
+    return {"source": SOURCE, "mode": "live", "state": st, "feed": _feed_label(st), "feed_state": st, "environment": APP_ENV, "ingest_enabled": ingest_enabled(), "key_configured": key_configured(), "configured": key_configured(),
+            "connected": bool(state["socket_open"] and state["subscription_confirmed"]),
             "websocket_open": bool(state["socket_open"]), "subscription_confirmed": state["subscription_confirmed"], "subscription_kind": state.get("subscription_kind"),
-            "messages_received": state["messages"], "positions_parsed": state["positions"], "positions_stored": state["inserted"], "messages_per_min": messages_per_min(), "vessels_active": len(state["active"]),
+            "messages_received": state["messages"], "positions_parsed": state["positions"], "regional_messages": state["positions"], "positions_stored": state["inserted"], "messages_per_min": messages_per_min(), "messages_per_minute": messages_per_min(),
+            "vessels_active": len(state["active"]), "active_vessels": len(state["active"]),
             "last_connect_attempt": state["last_connect_attempt"], "last_connected_at": state["connected_at"], "last_message_at": state["last_message_at"], "last_position_at": state["last_position_at"],
             "last_disconnect_at": state["last_disconnect_at"], "last_error": state["error"], "error": state["error"], "last_close_code": state["last_close_code"], "reconnects": state["reconnects"], "reconnect_count": state["reconnects"],
             "worker_running": bool(_task and not _task.done()), "worker_role": state["role"], "worker_owner": OWNER,
             "reason": None if (state["socket_open"] and state["subscription_confirmed"]) else (
+                STANDBY_DISABLED_REASON if state["role"] == "disabled" else
                 "API key not configured" if not key_configured() else
-                "Another client is using this AISStream API key (one connection per key) — production and preview must use different keys" if str(state["error"] or "").startswith("KEY_IN_USE_ELSEWHERE") else
+                KEY_CONFLICT_REASON if st == "KEY_CONFLICT" else
                 "WebSocket authentication failed (AISStream rejected the API key)" if state["error"] and ("api key" in str(state["error"]).lower() or "1008" in str(state["error"])) else
                 "Connection lost — reconnecting with backoff" if state["error"] else "Connecting")}
 
@@ -362,7 +376,7 @@ def status() -> dict:
 async def status_async() -> dict:
     """Same as status(), but a STANDBY process answers with the ingest worker's published snapshot (≤ 10 s old) instead of its own idle state."""
     s = status()
-    if s["state"] == "STANDBY":
+    if s["state"] == "STANDBY" and state["role"] != "disabled":
         snap = await db.settings.find_one({"key": "ais_runtime_status", "owner": {"$ne": OWNER}}, {"_id": 0, "key": 0})
         if snap:
             at = snap["at"] if snap["at"].tzinfo else snap["at"].replace(tzinfo=timezone.utc)

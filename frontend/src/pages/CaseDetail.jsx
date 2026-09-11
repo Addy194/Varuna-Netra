@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import bbox from "@turf/bbox";
-import { ArrowLeft, Download, Layers, FileText, Columns2, Globe2, Crosshair, Image as ImageIcon, Gavel } from "lucide-react";
+import { ArrowLeft, Download, Layers, FileText, Columns2, Globe2, Crosshair, Image as ImageIcon, Gavel, Pin } from "lucide-react";
 import { api, apiError, fmtTime, pct, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { StatusBadge, BandBadge } from "@/components/StatusBadge";
@@ -10,6 +10,7 @@ import { CaseMap, ZONE_STYLE } from "@/components/case/CaseMap";
 import { CandidatesTable } from "@/components/case/CandidatesTable";
 import { ReviewForm } from "@/components/case/ReviewForm";
 import { EvidenceTimeline } from "@/components/case/EvidenceTimeline";
+import { ChronoTimeline } from "@/components/case/ChronoTimeline";
 import { CorrelatePanel } from "@/components/case/CorrelatePanel";
 import { TimeScrubber } from "@/components/case/TimeScrubber";
 import { CaseTimeline } from "@/components/case/CaseTimeline";
@@ -149,6 +150,7 @@ export default function CaseDetail() {
           <Link to={`/compare?a=${id}`} data-testid="btn-compare-case" className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-slate-200" style={overlayBtn}><Columns2 size={12} /> Compare</Link>
           <button data-testid="btn-focus-spill" onClick={focusSpill} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider" style={{ ...overlayBtn, color: focus ? "#FFB703" : "#F8FAFC" }}><Crosshair size={12} /> Focus spill</button>
           {hasRole(user, "supervisor") && <button data-testid="btn-prosecution-export" disabled={exporting} onClick={prosecutionExport} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider text-rose-200 disabled:opacity-50" style={{ ...overlayBtn, borderColor: "rgba(255,42,109,0.6)" }}><Gavel size={12} /> {exporting ? "Bundling…" : "Prosecution export"}</button>}
+          {hasRole(user, "admin") && <button data-testid="btn-pin-reference" onClick={async () => { try { await api.put(`/demo/reference/${id}`); toast.success(`${c.case_number} pinned as SIH reference case (REFERENCE CASE — STORED DATA)`); } catch (e) { toast.error(apiError(e)); } }} title="Run SIH Demo will always open this stored case" className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider" style={{ ...overlayBtn, color: "#FFB703" }}><Pin size={12} /> Pin as SIH reference case</button>}
           <AssetSearch compact onSelect={(h) => { setFitTo(assetBounds(h)); setAsset(h); }} />
           <span className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 font-mono text-[11px] uppercase tracking-wider" style={{ ...overlayBtn, color: liveAis?.state === "LIVE" ? "#10B981" : "#94A3B8" }} data-testid="map-live-vessels-chip" title="Live AISStream vessels within 250 km of the slick (green dots)">● live AIS {liveAis?.state || "…"} · {nearLive.length} near slick</span>
           {overlayMeta?.has_quicklook && (
@@ -219,7 +221,7 @@ export default function CaseDetail() {
           {tab === "scenes" && <SceneTimeline caseId={id} />}
           {tab === "vulnerability" && <Vulnerability caseId={id} spillGeojson={geo} />}
           {tab === "beforeafter" && <div className="h-[520px]"><BeforeAfter caseId={id} /></div>}
-          {tab === "evidence" && <EvidenceTimeline evidence={evidence} />}
+          {tab === "evidence" && <><ChronoTimeline caseId={id} /><EvidenceTimeline evidence={evidence} /></>}
           {tab === "log" && (
             <div className="p-4 font-mono text-[11px] leading-relaxed" data-testid="processing-log">
               {evidence?.calculations?.processing_log?.map((l, i) => (

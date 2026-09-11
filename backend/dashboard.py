@@ -7,8 +7,9 @@ REAL_ORIGINS = ["detector", "analyst"]
 REAL_CASE_FILTER = {"source": {"$nin": DEMO_SOURCES}, "is_demo": {"$ne": True}, "origin": {"$in": REAL_ORIGINS}}
 DEMO_CASE_FILTER = {"$or": [{"source": {"$in": DEMO_SOURCES}}, {"is_demo": True}, {"origin": "demo"}]}
 PENDING_FILTER = {"status": "open", "review_state": "pending"}
-ORIGIN_LABEL = {"detector": "LIVE DETECTED", "analyst": "ANALYST CREATED", "imported": "IMPORTED HISTORICAL", "demo": "DEMO / REFERENCE", "reference": "DEMO / REFERENCE"}
-CORRELATION_STATE_LABEL = {"NOT_ANALYZED": "NOT ANALYZED", "NO_AIS_COVERAGE": "NO AIS COVERAGE", "NO_CANDIDATE_IN_TIME_WINDOW": "NO CANDIDATE IN TIME WINDOW", "SCORED": "SCORED"}
+ORIGIN_LABEL = {"detector": "VARUNA DETECTED", "analyst": "ANALYST CREATED", "imported": "IMPORTED HISTORICAL", "demo": "DEMO", "reference": "REFERENCE CASE"}
+DATA_STATE = {"detector": "STORED DATA", "analyst": "STORED DATA", "imported": "HISTORICAL DATA", "demo": "DEMO DATA", "reference": "STORED DATA"}
+CORRELATION_STATE_LABEL = {"NOT_ANALYZED": "NOT ANALYZED", "NOT_ANALYZABLE": "NOT ANALYZABLE", "NO_AIS_COVERAGE": "AIS COVERAGE UNAVAILABLE", "NO_CANDIDATE_IN_TIME_WINDOW": "NO AIS CANDIDATE IN TIME WINDOW", "SCORED": "SCORED"}
 
 
 def confidence_source(case: dict) -> str:
@@ -18,12 +19,33 @@ def confidence_source(case: dict) -> str:
 
 def correlation_state(case: dict, result: dict | None) -> str:
     if not case.get("latest_result_version") or not result:
-        return "NOT_ANALYZED"
+        return "NOT_ANALYZABLE" if case.get("not_analyzable_reason") else "NOT_ANALYZED"
     if not result.get("position_count"):
         return "NO_AIS_COVERAGE"
     if not result.get("vessel_count") or not case.get("candidate_count"):
         return "NO_CANDIDATE_IN_TIME_WINDOW"
     return "SCORED"
+
+
+async def analyzability(db, case: dict) -> str | None:
+    """Reason a correlation run would be pointless — or None when the case has the data it needs. Never invents inputs."""
+    spill = await db.spill_observations.find_one({"id": case["spill_observation_id"]}, {"_id": 0, "geometry": 1, "centroid": 1, "acquisition_time": 1, "extent_km": 1})
+    if not spill or not spill.get("geometry") or not spill.get("centroid"):
+        return "SPILL GEOMETRY MISSING"
+    if not spill.get("acquisition_time"):
+        return "ACQUISITION TIMESTAMP MISSING"
+    from models import CorrelationParams
+    from datetime import timedelta
+    p = CorrelationParams()
+    t0 = spill["acquisition_time"]
+    if t0.tzinfo is None:
+        t0 = t0.replace(tzinfo=timezone.utc)
+    lon, lat = spill["centroid"]["coordinates"]
+    q = {"timestamp": {"$gte": t0 - timedelta(hours=p.window_hours_before), "$lte": t0 + timedelta(hours=p.window_hours_after)},
+         "location": {"$geoWithin": {"$centerSphere": [[lon, lat], (p.corridor_km + (spill.get("extent_km") or 0)) / 6371.0088]}}}
+    if not await db.ais_positions.find_one(q, {"_id": 1}):
+        return "HISTORICAL AIS UNAVAILABLE FOR TIME WINDOW"
+    return None
 
 
 async def annotate_cases(db, rows: list) -> list:
@@ -34,13 +56,15 @@ async def annotate_cases(db, rows: list) -> list:
             latest.setdefault(r["case_id"], r)
     for c in rows:
         st = correlation_state(c, latest.get(c["id"]))
-        c["correlation_state"], c["correlation_state_label"] = st, CORRELATION_STATE_LABEL[st]
+        c["correlation_state"], c["correlation_state_label"] = st, CORRELATION_STATE_LABEL[st] + (f" — {c['not_analyzable_reason']}" if st == "NOT_ANALYZABLE" else "")
         c["detection_confidence_source"] = confidence_source(c)
         c["origin_label"] = ORIGIN_LABEL.get(c.get("origin"), c.get("origin_label"))
+        c["data_state"] = DATA_STATE.get(c.get("origin"), "STORED DATA")
     return rows
 
 SEMANTICS = {
-    "live_cases": "open cases with origin detector/analyst (real Sentinel-1 scene attached at registration); imported API polygons and demo/seed records excluded",
+    "live_cases": "ACTIVE CASES — status=open cases with origin detector/analyst (real Sentinel-1 scene attached at registration); imported API polygons and demo/seed records excluded",
+    "active_cases": "status=open cases with origin detector/analyst; imported/demo excluded",
     "pending_review": "live cases with status=open AND review_state=pending (no analyst decision yet)",
     "probable_confirmed": "live cases with attribution_status probable or analyst_confirmed",
     "ais_fixes_indexed": "persisted ais_positions documents (estimated count)",
@@ -97,7 +121,11 @@ async def compute_summary(db):
     prob = await cases.count_documents({**REAL_CASE_FILTER, "attribution_status": {"$in": ["probable", "analyst_confirmed"]}})
     ais_n = await db.ais_positions.estimated_document_count()
     return {
-        "live_cases": open_, "pending_review": pending, "probable_confirmed": prob, "ais_fixes_indexed": ais_n,
+        "active_cases": open_, "live_cases": open_, "pending_review": pending, "probable_confirmed": prob, "ais_fixes_indexed": ais_n,
+        "breakdown": {"total_records": await cases.count_documents({}), "active_real": open_, "closed_real": total - open_, "pending_review": pending,
+                      **{k: await cases.count_documents({**REAL_CASE_FILTER, "attribution_status": k}) for k in ["probable", "possible", "indeterminate", "insufficient_evidence", "analyst_confirmed"]},
+                      "confirmed_vessel": await cases.count_documents({**REAL_CASE_FILTER, "confirmed_vessel_mmsi": {"$nin": [None, ""]}}),
+                      "imported": by_origin.get("imported", 0), "varuna_detected": by_origin.get("detector", 0), "analyst_created": by_origin.get("analyst", 0), "reference": by_origin.get("reference", 0), "demo": len(demo_ids)},
         "cases": {"total": total, "open": open_, "closed": total - open_, "by_review_state": by_review, "by_attribution_status": by_attr, "by_source": by_source, "by_origin": by_origin, "all_records": await cases.count_documents({})},
         "pending": {"total": pending, "definition": SEMANTICS["pending_review"]},
         "alerts": {"total": await alerts.count_documents(real_alert_filter(excluded_ids)), "unread": await alerts.count_documents(unread),

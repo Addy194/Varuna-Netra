@@ -235,3 +235,18 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - P1 Reference Case Pin (admin pins case for /demo), Evidence Timeline "Not available" audit, AIS coverage auto-switch with confirmation, Canada EEZ re-import.
 - P1 Production deployment validation (APP_ENV=production, DEMO_MODE=false, GOOGLE_AUTH_ENABLED=true, production AISSTREAM key) — UNVERIFIED until deployed.
 - P2 Resend invitation e-mails (only if verified sender domain).
+
+## 2026-09-11 — Iteration 30: SIH stabilization pass (feature freeze after this)
+- AIS: `AIS_INGEST_ENABLED` flag → STANDBY (no reconnect loop); new `KEY_CONFLICT` state; diagnostics fields (environment, ingest_enabled, socket_owner, selected_aoi, feed_state, messages_per_minute, active_vessels, regional_messages…). Preview env now APP_ENV=preview, AIS_INGEST_ENABLED=false. Production must set AIS_INGEST_ENABLED=true + its key.
+- `GET /api/ais/coverage/check` + LiveAis prompt "No recent AIS coverage in this AOI" with Switch (supervisor) / Stay — only when feed operational; suggests a region that genuinely received positions in last 30 min.
+- Reference Case Pin: `GET/PUT/DELETE /api/demo/reference`; CaseDetail admin button; /demo uses ONLY the pinned case, shows REFERENCE CASE NOT PINNED / UNAVAILABLE otherwise. Currently pinned: SPL-20260910-106 (252e536c-…).
+- Counters: "Active cases" (summary.active_cases; live_cases kept as alias) + `breakdown`. 107 active = 107 pending is genuine: no analyst review has been recorded on any real case.
+- Labels: VARUNA DETECTED / ANALYST CREATED / IMPORTED HISTORICAL / REFERENCE CASE / DEMO + data_state STORED/HISTORICAL DATA. Correlation states: NOT ANALYZED, NOT ANALYZABLE — <reason>, AIS COVERAGE UNAVAILABLE, NO AIS CANDIDATE IN TIME WINDOW, SCORED.
+- `POST /api/cases/analyze-eligible` (supervisor, idempotent): 107 cases skipped — HISTORICAL AIS UNAVAILABLE FOR TIME WINDOW (no stored AIS within corridor/window). No scores fabricated.
+- `GET /api/cases/{id}/evidence-timeline` + ChronoTimeline (CaseDetail Evidence tab + demo step).
+- Canada EEZ imported from Marine Regions v12 (CAN-EEZ, 47,602 vertices, 393 parts, valid, 2dsphere OK; lookup 47N 60W → CAN-EEZ). Zones total 306.
+- Tests: /app/test_reports/iteration_30.json — 25/25 backend + all UI PASS.
+### Remaining / UNVERIFIED
+- Production deployment (AIS LIVE ownership, Google login on deployed URL, CORS from deployed origin) — must be checked on the deployed URL after redeploy.
+- Covered-region live AIS + coverage prompt "Switch" path cannot be exercised in preview (ingestion disabled by design).
+- 106/112 real cases have no historical AIS in their window → NOT ANALYZABLE; only SPL-20260910-106 has candidates.

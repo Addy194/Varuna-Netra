@@ -44,13 +44,17 @@ export default function Dashboard() {
   const shown = filter === "all" ? base : base.filter((c) => c.attribution_status === filter);
   const kv = (v) => (statsErr ? "UNAVAILABLE" : stats ? v : "—");
   const kpis = [
-    { label: "Live cases", value: kv(stats?.live_cases), icon: Waves, color: "#FF2A6D", to: "/?origin=real" },
+    { label: "Active cases", value: kv(stats?.active_cases), icon: Waves, color: "#FF2A6D", to: "/?origin=real" },
     { label: "Probable / confirmed", value: kv(stats?.probable_confirmed), icon: Ship, color: "#FF6B00", to: "/?origin=real&view=probable" },
     { label: "Pending review", value: kv(stats?.pending_review), icon: Clock, color: "#FFB703", to: "/?origin=real&view=pending" },
     { label: "AIS fixes indexed", value: kv(stats?.ais_fixes_indexed), icon: FileCheck, color: "#00F0FF", to: "/ingest" },
   ];
-  const ORIGIN_UI = { detector: ["LIVE DETECTED", "#10B981"], analyst: ["ANALYST CREATED", "#38BDF8"], imported: ["IMPORTED HISTORICAL", "#FFB703"], demo: ["DEMO / REFERENCE", "#94A3B8"], reference: ["DEMO / REFERENCE", "#94A3B8"] };
-  const stateUi = (c) => c.correlation_state && c.correlation_state !== "SCORED" ? <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500" title={c.correlation_state === "NOT_ANALYZED" ? "no correlation run has been executed for this case" : c.correlation_state === "NO_AIS_COVERAGE" ? "correlation ran but found zero AIS positions in the spatio-temporal window" : "AIS positions exist but no vessel track qualified as a candidate"}>{c.correlation_state_label}</span> : null;
+  const ORIGIN_UI = { detector: ["VARUNA DETECTED", "#10B981"], analyst: ["ANALYST CREATED", "#38BDF8"], imported: ["IMPORTED HISTORICAL", "#FFB703"], demo: ["DEMO", "#94A3B8"], reference: ["REFERENCE CASE", "#FFB703"] };
+  const stateUi = (c) => c.correlation_state && c.correlation_state !== "SCORED" ? <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500" title={c.correlation_state === "NOT_ANALYZED" ? "no correlation run has been executed for this case" : c.correlation_state === "NOT_ANALYZABLE" ? "a correlation run cannot produce a result: required input is missing" : c.correlation_state === "NO_AIS_COVERAGE" ? "correlation ran but found zero AIS positions in the spatio-temporal window" : "AIS positions exist but no vessel track qualified as a candidate"}>{c.correlation_state_label}</span> : null;
+  const analyzeEligible = async () => {
+    try { const { data } = await api.post("/cases/analyze-eligible"); toast.success(`Queued ${data.queued.length} correlation run(s) · ${data.skipped.length} not analyzable`); setTimeout(() => load().catch(() => {}), 1500); }
+    catch (e) { toast.error(apiError(e)); }
+  };
   const heading = view === "pending" ? `Pending review · ${base.length} open cases awaiting analyst decision` : view === "probable" ? `Probable / confirmed · ${base.length}` : `Investigation cases · ${base.length}`;
 
   return (
@@ -81,6 +85,7 @@ export default function Dashboard() {
                   className={`rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider transition-colors ${origin === o ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/40" : "text-slate-400 border border-slate-700 hover:text-slate-100"}`}>{o}{o === "imported" && stats ? ` ${stats.demo.imported}` : o === "demo" && stats ? ` ${stats.demo.cases}` : ""}</button>))}
             </span>
             {view !== "all" && <button data-testid="view-all-cases" onClick={() => setParams({ origin })} className="rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider border border-amber-400/40 text-amber-300">clear {view} filter</button>}
+            {hasRole(user, "supervisor") && origin === "real" && <button data-testid="analyze-eligible-button" onClick={analyzeEligible} title="Queues correlation only for never-analysed cases that have spill geometry, a timestamp and AIS history in the window; others are tagged NOT ANALYZABLE with the reason" className="rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10">Analyze eligible cases</button>}
             {["all", "probable", "possible", "indeterminate", "insufficient_evidence", "analyst_confirmed"].map((f) => (
               <button key={f} data-testid={`filter-${f}`} onClick={() => setFilter(f)}
                 className={`rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider transition-colors ${filter === f ? "bg-cyan-400/15 text-cyan-300 border border-cyan-400/40" : "text-slate-400 border border-slate-700 hover:text-slate-100 hover:border-slate-500"}`}>
@@ -100,7 +105,7 @@ export default function Dashboard() {
               {shown.map((c) => (
                 <tr key={c.id} data-testid={`case-row-${c.case_number}`} onClick={() => nav(`/cases/${c.id}`)}
                   className="cursor-pointer border-t transition-colors hover:bg-slate-800/50" style={{ borderColor: "var(--border-default)" }}>
-                  <td className="px-4 py-3 font-mono text-cyan-300">{c.case_number}<span className="ml-1.5 rounded px-1 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: (ORIGIN_UI[c.origin] || ["UNTAGGED", "#94A3B8"])[1], border: `1px solid ${(ORIGIN_UI[c.origin] || ["", "#94A3B8"])[1]}55` }} data-testid={`case-origin-${c.case_number}`}>{(ORIGIN_UI[c.origin] || ["UNTAGGED"])[0]}</span></td>
+                  <td className="px-4 py-3 font-mono text-cyan-300">{c.case_number}<span className="ml-1.5 rounded px-1 py-0.5 text-[9px] uppercase tracking-wider" style={{ color: (ORIGIN_UI[c.origin] || ["UNTAGGED", "#94A3B8"])[1], border: `1px solid ${(ORIGIN_UI[c.origin] || ["", "#94A3B8"])[1]}55` }} data-testid={`case-origin-${c.case_number}`}>{(ORIGIN_UI[c.origin] || ["UNTAGGED"])[0]}</span><span className="ml-1 rounded px-1 py-0.5 text-[9px] uppercase tracking-wider text-slate-500 border border-slate-700" data-testid={`case-datastate-${c.case_number}`}>{c.data_state}</span></td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-300">{fmtTime(c.acquisition_time)}</td>
                   <td className="px-4 py-3 text-xs text-slate-400">{c.source}</td>
                   <td className="px-4 py-3 font-mono text-[10px]" data-testid={`case-jurisdiction-${c.case_number}`} title={c.primary_jurisdiction?.authority}>{c.primary_jurisdiction ? <span className="text-cyan-300">{c.primary_jurisdiction.code}</span> : <span className="text-slate-500">unassigned</span>}</td>

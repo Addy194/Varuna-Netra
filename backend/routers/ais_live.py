@@ -24,9 +24,36 @@ class Coverage(BaseModel):
 async def live_status(user=Depends(get_current_user)):
     cov = await ais_live.get_coverage()
     st = await ais_live.status_async()
-    return clean({**st, "coverage_mode": cov["mode"], "coverage_name": cov["name"], "coverage_bbox": cov["bboxes"], "coverage_bbox_format": "[S,W,N,E]",
+    lease = await db.settings.find_one({"key": ais_live.LEASE_KEY}, {"_id": 0, "owner": 1}) or {}
+    return clean({**st, "socket_owner": lease.get("owner"), "selected_aoi": cov["name"], "coverage_mode": cov["mode"], "coverage_name": cov["name"], "coverage_bbox": cov["bboxes"], "coverage_bbox_format": "[S,W,N,E]",
                   "aisstream_bounding_boxes": ais_live.to_aisstream_boxes(cov["bboxes"]), "coverage_ref": cov.get("ref"), "regions": ais_live.REGIONS,
                   "note": None if st["connected"] else "Satellite analysis still operational; vessel attribution unavailable until AIS coverage is restored."})
+
+
+def _bbox_query(bboxes: list, since: datetime) -> dict:
+    return {"source": ais_live.SOURCE, "timestamp": {"$gte": since},
+            "$or": [{"location": {"$geoWithin": {"$box": [[b[1], b[0]], [b[3], b[2]]]}}} for b in bboxes]}
+
+
+@router.get("/ais/coverage/check")
+async def coverage_check(minutes: int = Query(30, ge=5, le=1440), user=Depends(get_current_user)):
+    """Genuine recent AISStream positions inside the selected AOI, plus the regions that DID receive positions — drives the 'switch to live region?' prompt. No fabricated vessels."""
+    cov = await ais_live.get_coverage()
+    st = await ais_live.status_async()
+    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    in_aoi = await db.ais_positions.count_documents(_bbox_query(cov["bboxes"], since))
+    live_regions = []
+    for k, r in ais_live.REGIONS.items():
+        if k == "global":
+            continue
+        n = await db.ais_positions.count_documents(_bbox_query([r["bbox"]], since))
+        if n:
+            live_regions.append({"region": k, "name": r["name"], "recent_positions": n})
+    live_regions.sort(key=lambda x: -x["recent_positions"])
+    operational = st["state"] in ("LIVE", "CONNECTED", "STALE")
+    return clean({"aoi": cov["name"], "coverage_mode": cov["mode"], "window_minutes": minutes, "recent_positions_in_aoi": in_aoi, "feed_state": st["state"], "feed_operational": operational,
+                  "covered": in_aoi > 0, "prompt": operational and in_aoi == 0, "live_regions": live_regions, "suggested_region": live_regions[0] if live_regions else None,
+                  "message": None if in_aoi else ("AISStream is operational, but no recent terrestrial AIS observations were received for this selected region." if operational else f"AIS feed is {st['state']} — no live observations are being received on this instance.")})
 
 
 @router.post("/ais/coverage")

@@ -286,3 +286,6 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - Layout top bar: added a **context chip** (`data-testid=context-chip`) showing `CASE <number>` on `/cases/:id` routes and `AOI · <name>`/`AOI · Global (none set)` elsewhere (from `/api/aoi`). Hidden below lg.
 - Counters unchanged (already truthful): active_cases = open VARUNA_DETECTED/analyst cases (imported 85 & demo excluded); 122 active = 122 pending is genuine (no analyst review recorded yet); probable/confirmed = 0 is truthful. Not changed to look prettier.
 - TEE: this Emergent/k8s host does NOT expose a hardware-backed TEE — NOT implemented/claimed (would be fabrication). Positioned as "TEE-ready; hardware attestation is deployment-dependent".
+
+## 2026-06 — Dashboard: Imported-historical KPI card
+- Added a 5th KPI card on Surveillance — **"IMPORTED HISTORICAL"** (value = `summary.demo.imported`, 85), clickable → `/?origin=imported`, with a tooltip clarifying these are stored records without a live Sentinel-1 detection and are excluded from Active/Pending. Grid widened to xl:grid-cols-5. Label kept as "IMPORTED HISTORICAL" (not "Verified") — not all imported records have verified source citations, so no overclaim. Verified: card shows "IMPORTED HISTORICAL 85"; compiled clean.

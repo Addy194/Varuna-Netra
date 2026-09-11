@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { ShieldAlert, Check, Waves, Ship, Clock, FileCheck } from "lucide-react";
+import { ShieldAlert, Check, Waves, Ship, Clock, FileCheck, BookOpen } from "lucide-react";
 import { api, apiError, fmtTime, pct, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { StatusBadge, BandBadge } from "@/components/StatusBadge";
@@ -48,6 +48,7 @@ export default function Dashboard() {
     { label: "Probable / confirmed", value: kv(stats?.probable_confirmed), icon: Ship, color: "#FF6B00", to: "/?origin=real&view=probable" },
     { label: "Pending review", value: kv(stats?.pending_review), icon: Clock, color: "#FFB703", to: "/?origin=real&view=pending" },
     { label: "AIS fixes indexed", value: kv(stats?.ais_fixes_indexed), icon: FileCheck, color: "#00F0FF", to: "/ingest" },
+    { label: "Imported historical", value: kv(stats?.demo?.imported), icon: BookOpen, color: "#94A3B8", to: "/?origin=imported", title: "Imported historical incidents — stored records without a live Sentinel-1 detection. Excluded from Active cases / Pending review." },
   ];
   const ORIGIN_UI = { detector: ["VARUNA DETECTED", "#10B981"], analyst: ["ANALYST CREATED", "#38BDF8"], imported: ["IMPORTED HISTORICAL", "#FFB703"], demo: ["DEMO", "#94A3B8"], reference: ["REFERENCE CASE", "#FFB703"] };
   const stateUi = (c) => c.correlation_state && c.correlation_state !== "SCORED" ? <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500" title={c.correlation_state === "NOT_ANALYZED" ? "no correlation run has been executed for this case" : c.correlation_state === "NOT_ANALYZABLE" ? "a correlation run cannot produce a result: required input is missing" : c.correlation_state === "NO_AIS_COVERAGE" ? "correlation ran but found zero AIS positions in the spatio-temporal window" : "AIS positions exist but no vessel track qualified as a candidate"}>{c.correlation_state_label}</span> : null;
@@ -64,9 +65,9 @@ export default function Dashboard() {
           <p className="label-mono mb-1">Decision support · not a legal determination</p>
           <h1 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">Spill Surveillance</h1>
         </div>
-        <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
           {kpis.map((k, i) => (
-            <button type="button" key={k.label} onClick={() => nav(k.to)} className="panel p-4 fade-up text-left hover:border-cyan-400/40 transition-colors" style={{ animationDelay: `${i * 60}ms` }} data-testid={`kpi-${k.label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
+            <button type="button" key={k.label} onClick={() => nav(k.to)} title={k.title} className="panel p-4 fade-up text-left hover:border-cyan-400/40 transition-colors" style={{ animationDelay: `${i * 60}ms` }} data-testid={`kpi-${k.label.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
               <div className="flex items-center justify-between">
                 <span className="label-mono">{k.label}</span>
                 <k.icon size={14} color={k.color} />

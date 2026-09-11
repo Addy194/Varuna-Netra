@@ -255,3 +255,8 @@ POST/GET scenes, POST scenes/{id}/detect (mock), POST/GET spill-observations, PO
 - User supplied 4 AISStream keys (never printed). Preview: `AISSTREAM_API_KEY`=key #1, `AIS_INGEST_ENABLED=true` → verified LIVE (subscription confirmed, 2 vessels Bay of Bengal, 0 reconnects). Production should use keys #2–#4 via `AISSTREAM_API_KEYS` (comma list) — worker rotates to the next pool key after a KEY_IN_USE_ELSEWHERE conflict (`key_rotations`, `active_key_index`, `keys_configured` in status; values never exposed).
 - Coverage prompt verified live: Andaman AOI → prompt shown → Switch → Bay of Bengal with reason toast; default AOI restored afterwards.
 - Advice: keys were pasted in chat — rotate them at aisstream.io after SIH.
+
+## 2026-09-11 — Production verified + branding
+- Deployed https://vessel-correlate-1.emergent.host verified: environment=production, demo_mode=false, Google READY, AIS CONNECTED (subscription confirmed, 0 reconnects, no KEY_CONFLICT; LIVE pending regional traffic), CORS own-origin 200 / foreign 400, login page shows Google button, demo block hidden. keys_configured=1 on prod (AISSTREAM_API_KEYS not set — optional).
+- Production DB is separate: reference case NOT pinned yet; 22 demo records present (excluded from counters) — admin may purge via POST /api/system/purge-demo.
+- Branding: <title>Varuna Netra</title>, favicon.svg + manifest.json + og/meta tags (needs frontend redeploy to reach production).

@@ -25,6 +25,9 @@ export const pct = (x) => `${Math.round((x || 0) * 100)}%`;
 
 export const ROLE_RANK = { analyst: 0, supervisor: 1, admin: 2 };
 export const hasRole = (user, min) => !!user && ROLE_RANK[user.role] >= ROLE_RANK[min];
+export const isGuest = (user) => user?.role === "guest";
+export const isReadOnly = (user) => !!user && (user.role === "guest" || user.role === "viewer");
+export const ROLE_LABEL = { guest: "Guest · read-only", viewer: "Viewer · read-only", analyst: "Analyst", supervisor: "Supervisor", admin: "Administrator" };
 
 export const STATUS_LABEL = {
   indeterminate: "Indeterminate",

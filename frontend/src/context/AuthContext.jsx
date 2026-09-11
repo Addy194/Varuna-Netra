@@ -20,6 +20,24 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   }, []);
 
+  const guestLogin = useCallback(async () => {
+    const { data } = await api.post("/auth/guest");
+    setUser(data.user);
+    return data.user;
+  }, []);
+
+  const signup = useCallback(async (payload) => {
+    const { data } = await api.post("/auth/signup", payload);
+    setUser(data.user);
+    return data.user;
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const { data } = await api.get("/auth/me");
+    setUser(data);
+    return data;
+  }, []);
+
   const loginWithGoogleSession = useCallback(async (sessionId) => {
     const { data } = await api.post("/auth/google/session", { session_id: sessionId });
     setUser(data.user);
@@ -31,7 +49,7 @@ export const AuthProvider = ({ children }) => {
     setUser(false);
   }, []);
 
-  const value = useMemo(() => ({ user, login, loginWithGoogleSession, logout }), [user, login, loginWithGoogleSession, logout]);
+  const value = useMemo(() => ({ user, login, guestLogin, signup, refreshUser, loginWithGoogleSession, logout }), [user, login, guestLogin, signup, refreshUser, loginWithGoogleSession, logout]);
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 };
 

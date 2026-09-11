@@ -47,7 +47,7 @@ async def ack_alert(alert_id: str, user=Depends(require_role("supervisor"))):
 
 
 @router.get("/audit")
-async def list_audit(entity_id: Optional[str] = None, limit: int = Query(200, le=2000), user=Depends(get_current_user)):
+async def list_audit(entity_id: Optional[str] = None, limit: int = Query(200, le=2000), user=Depends(require_role("analyst"))):
     q = {"entity_id": entity_id} if entity_id else {}
     return clean(await db.audit_events.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit))
 

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
 import { Radar, ShieldAlert, LogOut, Menu, MapPin } from "lucide-react";
-import { api, hasRole } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { LiveBell, CriticalBanner } from "@/components/LiveBell";
 import { Sidebar } from "@/components/Sidebar";
 
-const ROLE_COLOR = { analyst: "#00F0FF", supervisor: "#FFB703", admin: "#FF2A6D" };
+const ROLE_COLOR = { guest: "#94A3B8", viewer: "#38BDF8", analyst: "#00F0FF", supervisor: "#FFB703", admin: "#FF2A6D" };
 const COLLAPSE_KEY = "vn_sidebar_collapsed";
 
 export const Layout = () => {
@@ -63,10 +63,11 @@ export const Layout = () => {
           <LiveBell />
           {user && (
             <div className="flex items-center gap-2 border-l pl-4" style={{ borderColor: "var(--border-default)" }} data-testid="user-chip">
-              <div className="hidden text-right leading-tight sm:block">
+              {user.role === "guest" && <span data-testid="guest-badge" className="hidden rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider sm:inline" style={{ color: "#94A3B8", borderColor: "#94A3B855", background: "rgba(148,163,184,0.1)" }}>Guest · read only</span>}
+              <NavLink to="/account" data-testid="nav-account-link" className="hidden text-right leading-tight sm:block hover:opacity-80">
                 <div className="text-xs text-slate-200" data-testid="user-name">{user.name}</div>
-                <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: ROLE_COLOR[user.role] }} data-testid="user-role">{user.role}</div>
-              </div>
+                <div className="font-mono text-[10px] uppercase tracking-wider" style={{ color: ROLE_COLOR[user.role] || "#94A3B8" }} data-testid="user-role">{user.role}</div>
+              </NavLink>
               <button data-testid="logout-button" onClick={async () => { await logout(); nav("/login"); }} title="Sign out" className="rounded p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-100"><LogOut size={14} /></button>
             </div>
           )}

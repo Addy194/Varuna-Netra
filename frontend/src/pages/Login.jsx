@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate, Link } from "react-router-dom";
-import { Radar, LogIn, ShieldCheck } from "lucide-react";
+import { Radar, LogIn, ShieldCheck, Compass } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { api, apiError } from "@/lib/api";
@@ -12,13 +12,14 @@ const DEMO = [
 const DEMO_PASSWORDS = {}; // never ship passwords in the bundle — demo buttons only pre-fill the e-mail
 
 export default function Login() {
-  const { user, login } = useAuth();
+  const { user, login, guestLogin } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
+  const [exploreBusy, setExploreBusy] = useState(false);
   const [caps, setCaps] = useState(null);
   const [error, setError] = useState("");
 
@@ -34,6 +35,13 @@ export default function Login() {
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
     const redirectUrl = window.location.origin + "/";
     window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
+  const explore = async () => {
+    if (exploreBusy) return;
+    setExploreBusy(true); setError("");
+    try { await guestLogin(); nav("/", { replace: true }); }
+    catch (err) { setError(apiError(err)); setExploreBusy(false); }
   };
 
   const submit = async (e) => {
@@ -62,8 +70,13 @@ export default function Login() {
       </div>
       <div className="flex items-center justify-center p-8">
         <form onSubmit={submit} className="panel w-full max-w-md p-8 fade-up" data-testid="login-form">
-          <h2 className="font-display text-2xl font-bold tracking-tight">Sign in</h2>
-          <p className="mt-1 text-xs text-slate-400">Use your authority account credentials.</p>
+          <h2 className="font-display text-2xl font-bold tracking-tight">Varuna Netra</h2>
+          <p className="mt-1 text-xs text-slate-400">Maritime oil-spill intelligence · satellite + AIS decision support.</p>
+          <button type="button" data-testid="explore-guest-button" onClick={explore} disabled={exploreBusy}
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded border px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-wider text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-50" style={{ borderColor: "rgba(0,240,255,0.4)" }}>
+            <Compass size={14} /> {exploreBusy ? "Entering…" : "Explore Varuna Netra (read-only)"}
+          </button>
+          <div className="mt-5 flex items-center gap-3"><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /><span className="label-mono">or sign in</span><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /></div>
           <label className="mt-6 block"><span className="label-mono mb-1 block">Email</span>
             <input data-testid="login-email-input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required
               className="w-full rounded border bg-slate-900/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/60" style={{ borderColor: "var(--border-highlight)" }} /></label>
@@ -75,6 +88,7 @@ export default function Login() {
             <LogIn size={14} /> {busy ? "Signing in…" : "Sign in"}
           </button>
           <Link to="/forgot-password" data-testid="forgot-password-link" className="mt-3 block text-center font-mono text-[11px] uppercase tracking-wider text-slate-400 hover:text-cyan-300">Forgot password?</Link>
+          <Link to="/signup" data-testid="create-account-link" className="mt-2 block text-center font-mono text-[11px] uppercase tracking-wider text-cyan-300 hover:text-cyan-200">Create account — free Viewer access</Link>
           {googleReady && (
             <div className="mt-5" data-testid="google-signin-block">
               <div className="flex items-center gap-3"><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /><span className="label-mono">or</span><span className="h-px flex-1" style={{ background: "var(--border-default)" }} /></div>
@@ -83,7 +97,7 @@ export default function Login() {
                 <svg width="14" height="14" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.3l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.7 6c4.5-4.2 6.9-10.3 6.9-17.7z"/><path fill="#FBBC05" d="M10.5 28.6A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.1.8-4.6l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.3 0 11.7-2.1 15.6-5.8l-7.7-6c-2.1 1.4-4.8 2.3-7.9 2.3-6.3 0-11.6-4.1-13.5-9.9l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
                 {googleBusy ? "Redirecting to Google…" : "Continue with Google"}
               </button>
-              <p className="mt-2 text-center text-[10px] text-slate-500">Invite-only: your Google e-mail must already be an authorized Varuna Netra account.</p>
+              <p className="mt-2 text-center text-[10px] text-slate-500">New Google users get read-only Viewer access. Existing accounts keep their role.</p>
             </div>
           )}
           {showDemo && <div className="mt-6 border-t pt-4" style={{ borderColor: "var(--border-default)" }}>

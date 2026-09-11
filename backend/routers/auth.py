@@ -9,14 +9,19 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from auth import (check_lockout, clear_failures, create_access_token, get_current_user, hash_password, public_user,
-                  record_failure, require_role, verify_password, ROLES, ACCESS_HOURS)
+from auth import (check_lockout, clear_failures, create_access_token, create_guest_token, get_current_user, hash_password,
+                  public_user, record_failure, require_role, verify_password, validate_password, rate_limit,
+                  ROLES, ADMIN_ASSIGNABLE, ACCESS_HOURS, GUEST_ACCESS_HOURS, ROLE_RANK)
 from db import db, clean, audit
 from emailer import send_email, reset_email_html, test_email_html, record_test, configured as email_configured, get_config as get_email_config
-from models import LoginRequest, UserCreate, UserUpdate, ForgotPasswordRequest, ResetPasswordRequest, new_id
+from models import LoginRequest, UserCreate, UserUpdate, ForgotPasswordRequest, ResetPasswordRequest, SignupRequest, RoleRequestCreate, new_id
 
 logger = logging.getLogger("auth")
 router = APIRouter()
+
+
+def _client_ip(request: Request) -> str:
+    return (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "unknown")).split(",")[0].strip()
 
 
 @router.post("/auth/login")
@@ -95,6 +100,119 @@ async def google_session(body: GoogleSession, request: Request, response: Respon
     return {"access_token": token, "token_type": "bearer", "user": clean(public_user(user))}
 
 
+@router.post("/auth/guest")
+async def guest_session(request: Request, response: Response):
+    """Public, server-issued READ-ONLY session (role=guest). No account, no DB user; every write is denied server-side."""
+    await rate_limit(f"guest:{_client_ip(request)}", 60, 3600)
+    token = create_guest_token()
+    response.set_cookie("access_token", token, httponly=True, secure=True, samesite="lax", max_age=GUEST_ACCESS_HOURS * 3600, path="/")
+    return {"access_token": token, "token_type": "bearer", "user": {"id": "guest", "email": None, "name": "Guest", "role": "guest", "active": True, "is_guest": True}}
+
+
+@router.post("/auth/signup", status_code=201)
+async def signup(body: SignupRequest, request: Request, response: Response):
+    """Public self-registration. Role is FORCED to viewer server-side — never taken from the client. Auto-active for the hackathon (no e-mail verification while Resend runs in sandbox)."""
+    await rate_limit(f"signup:{_client_ip(request)}", 10, 3600)
+    validate_password(body.password)
+    email = body.email.lower().strip()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(400, "A valid e-mail address is required")
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        if not existing.get("active", True):
+            raise HTTPException(403, "Your Varuna Netra account is disabled. Contact an administrator.")
+        if existing.get("password_hash"):
+            raise HTTPException(400, "An account with this e-mail already exists. Please sign in.")
+        # Google-only account signing up with a password → link it, PRESERVE the stored role (never downgrade/upgrade)
+        await db.users.update_one({"id": existing["id"]}, {"$set": {"password_hash": hash_password(body.password),
+                                  "name": existing.get("name") or body.name.strip(), "organization": body.organization, "auth_provider": "google+password"}})
+        user = await db.users.find_one({"id": existing["id"]})
+        await audit("user", user["id"], "auth.signup_linked", {"email": email}, email)
+    else:
+        now = datetime.now(timezone.utc)
+        user = {"id": new_id(), "email": email, "name": body.name.strip(), "role": "viewer", "active": True,
+                "auth_provider": "password", "email_verified": False, "password_hash": hash_password(body.password),
+                "organization": body.organization, "created_at": now, "first_login": now, "last_login": now, "last_login_method": "password"}
+        await db.users.insert_one(dict(user))
+        await audit("user", user["id"], "auth.signup", {"email": email, "role": "viewer"}, email)
+    token = create_access_token(user)
+    response.set_cookie("access_token", token, httponly=True, secure=True, samesite="lax", max_age=ACCESS_HOURS * 3600, path="/")
+    return {"access_token": token, "token_type": "bearer", "user": clean(public_user(user))}
+
+
+@router.post("/role-requests", status_code=201)
+async def create_role_request(body: RoleRequestCreate, request: Request, user=Depends(get_current_user)):
+    if user.get("is_guest"):
+        raise HTTPException(403, "Sign in with an account to request elevated access.")
+    if body.requested_role not in ("analyst", "supervisor"):
+        raise HTTPException(400, "You may only request analyst or supervisor access. Admin is granted only by an existing administrator.")
+    if ROLE_RANK.get(user["role"], -1) >= ROLE_RANK[body.requested_role]:
+        raise HTTPException(400, f"Your account already has {user['role']} access.")
+    await rate_limit(f"rolereq:{user['id']}", 5, 3600)
+    if await db.role_requests.find_one({"user_id": user["id"], "status": "pending"}):
+        raise HTTPException(400, "You already have a pending access request.")
+    now = datetime.now(timezone.utc)
+    doc = {"id": new_id(), "user_id": user["id"], "email": user["email"], "name": user.get("name"),
+           "current_role": user["role"], "requested_role": body.requested_role, "organization": body.organization,
+           "reason": body.reason, "status": "pending", "requested_at": now}
+    await db.role_requests.insert_one(dict(doc))
+    await audit("role_request", doc["id"], "role_request.submitted", {"requested_role": body.requested_role}, user["email"])
+    return clean(doc)
+
+
+@router.get("/role-requests/me")
+async def my_role_request(user=Depends(get_current_user)):
+    if user.get("is_guest"):
+        return {"request": None}
+    req = await db.role_requests.find_one({"user_id": user["id"]}, sort=[("requested_at", -1)])
+    return clean({"request": req})
+
+
+@router.delete("/role-requests/me")
+async def cancel_my_role_request(user=Depends(get_current_user)):
+    if user.get("is_guest"):
+        raise HTTPException(403, "Not permitted")
+    res = await db.role_requests.update_one({"user_id": user["id"], "status": "pending"}, {"$set": {"status": "cancelled", "resolved_at": datetime.now(timezone.utc)}})
+    return {"ok": bool(res.modified_count)}
+
+
+@router.get("/role-requests")
+async def list_role_requests(status: Optional[str] = None, user=Depends(require_role("admin"))):
+    q = {"status": status} if status else {}
+    return clean(await db.role_requests.find(q).sort("requested_at", -1).to_list(200))
+
+
+@router.post("/role-requests/{req_id}/approve")
+async def approve_role_request(req_id: str, user=Depends(require_role("admin"))):
+    req = await db.role_requests.find_one({"id": req_id})
+    if not req:
+        raise HTTPException(404, "request not found")
+    if req["status"] != "pending":
+        raise HTTPException(400, "request already resolved")
+    if req["requested_role"] not in ("analyst", "supervisor"):
+        raise HTTPException(400, "invalid requested role")
+    target = await db.users.find_one({"id": req["user_id"]})
+    if not target:
+        raise HTTPException(404, "user not found")
+    old = target.get("role")
+    await db.users.update_one({"id": req["user_id"]}, {"$set": {"role": req["requested_role"]}})
+    await db.role_requests.update_one({"id": req_id}, {"$set": {"status": "approved", "resolved_at": datetime.now(timezone.utc), "resolved_by": user["email"]}})
+    await audit("user", req["user_id"], "role_request.approved", {"old_role": old, "new_role": req["requested_role"]}, user["email"])
+    return {"ok": True, "user_id": req["user_id"], "role": req["requested_role"]}
+
+
+@router.post("/role-requests/{req_id}/reject")
+async def reject_role_request(req_id: str, user=Depends(require_role("admin"))):
+    req = await db.role_requests.find_one({"id": req_id})
+    if not req:
+        raise HTTPException(404, "request not found")
+    if req["status"] != "pending":
+        raise HTTPException(400, "request already resolved")
+    await db.role_requests.update_one({"id": req_id}, {"$set": {"status": "rejected", "resolved_at": datetime.now(timezone.utc), "resolved_by": user["email"]}})
+    await audit("role_request", req_id, "role_request.rejected", {"requested_role": req["requested_role"]}, user["email"])
+    return {"ok": True}
+
+
 @router.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return clean(user)
@@ -107,8 +225,8 @@ async def list_users(user=Depends(require_role("admin"))):
 
 @router.post("/users", status_code=201)
 async def create_user(body: UserCreate, user=Depends(require_role("admin"))):
-    if body.role not in ROLES:
-        raise HTTPException(400, f"role must be one of {ROLES}")
+    if body.role not in ADMIN_ASSIGNABLE:
+        raise HTTPException(400, f"role must be one of {ADMIN_ASSIGNABLE}")
     email = body.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "email already registered")
@@ -126,8 +244,8 @@ async def update_user(user_id: str, body: UserUpdate, user=Depends(require_role(
         raise HTTPException(404, "user not found")
     update = {}
     if body.role is not None:
-        if body.role not in ROLES:
-            raise HTTPException(400, f"role must be one of {ROLES}")
+        if body.role not in ADMIN_ASSIGNABLE:
+            raise HTTPException(400, f"role must be one of {ADMIN_ASSIGNABLE}")
         if user_id == user["id"] and body.role != "admin":
             raise HTTPException(400, "cannot demote yourself")
         update["role"] = body.role

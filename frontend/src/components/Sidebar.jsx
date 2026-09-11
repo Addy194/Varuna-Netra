@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { Radar, LayoutDashboard, Satellite, Globe2, Images, ShieldAlert, Eye, Columns2, BookOpen, Map as MapIcon, HeartPulse, Play, Users as UsersIcon, Bookmark, ChevronsLeft, ChevronsRight, X } from "lucide-react";
+import { Radar, LayoutDashboard, Satellite, Globe2, Images, ShieldAlert, Eye, Columns2, BookOpen, Map as MapIcon, HeartPulse, Play, Users as UsersIcon, Bookmark, UserCog, ChevronsLeft, ChevronsRight, X } from "lucide-react";
 import { api, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 
@@ -82,9 +82,11 @@ const NavBody = ({ collapsed, onNavigate }) => {
         {hasRole(user, "admin") && (
           <>
             {!collapsed && <p className="label-mono px-3 pb-1 pt-2 text-[9px] text-slate-600">Admin</p>}
-            <NavItem item={{ to: "/users", label: "Users", icon: UsersIcon, id: "nav-users-link" }} collapsed={collapsed} onNavigate={onNavigate} />
+            <NavItem item={{ to: "/users", label: "Users & Roles", icon: UsersIcon, id: "nav-users-link" }} collapsed={collapsed} onNavigate={onNavigate} />
           </>
         )}
+        {!collapsed && <p className="label-mono px-3 pb-1 pt-2 text-[9px] text-slate-600">Session</p>}
+        <NavItem item={{ to: "/account", label: "Account", icon: UserCog, id: "nav-account-sidebar-link" }} collapsed={collapsed} onNavigate={onNavigate} />
       </div>
     </nav>
   );

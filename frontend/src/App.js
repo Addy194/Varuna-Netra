@@ -25,6 +25,8 @@ import { LiveFeedProvider } from "@/context/LiveFeed";
 import { InactivityGuard } from "@/components/InactivityGuard";
 import { ForgotPassword, ResetPassword } from "@/pages/PasswordReset";
 import AuthCallback from "@/pages/AuthCallback";
+import Signup from "@/pages/Signup";
+import Account from "@/pages/Account";
 
 const Protected = ({ children, role }) => {
   const { user } = useAuth();
@@ -42,6 +44,7 @@ const AppRoutes = () => {
   return (
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<Signup />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/verify" element={<Verify />} />
@@ -50,6 +53,7 @@ const AppRoutes = () => {
               <Route path="/cases/:id" element={<CaseDetail />} />
               <Route path="/vessels/:mmsi" element={<VesselProfile />} />
               <Route path="/zones" element={<Zones />} /><Route path="/demo" element={<SihDemo />} />
+              <Route path="/account" element={<Account />} />
               <Route path="/watchlist" element={<Watchlist />} />
               <Route path="/compare" element={<Compare />} />
               <Route path="/explorer" element={<SceneExplorer />} />

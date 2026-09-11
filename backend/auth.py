@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -9,10 +10,14 @@ from db import db, audit
 from models import new_id
 
 ALG = "HS256"
-ROLES = ["analyst", "supervisor", "admin"]
-ROLE_RANK = {r: i for i, r in enumerate(ROLES)}
+ROLES = ["analyst", "supervisor", "admin"]  # legacy staff roles
+ALL_ROLES = ["guest", "viewer", "analyst", "supervisor", "admin"]
+ADMIN_ASSIGNABLE = ["viewer", "analyst", "supervisor", "admin"]  # roles an admin may assign; 'guest' is never a stored role
+ROLE_RANK = {"viewer": 0, "analyst": 1, "supervisor": 2, "admin": 3}  # 'guest' (and unknown) → -1 via .get(role, -1): denied every write
 ACCESS_HOURS = 12
+GUEST_ACCESS_HOURS = 6
 LOCKOUT_ATTEMPTS, LOCKOUT_MINUTES = 5, 15
+GUEST_USER = {"id": "guest", "email": None, "name": "Guest", "role": "guest", "active": True, "is_guest": True}
 
 
 def hash_password(p: str) -> str:
@@ -27,6 +32,33 @@ def create_access_token(user: dict) -> str:
     payload = {"sub": user["id"], "email": user["email"], "role": user["role"], "type": "access",
                "exp": datetime.now(timezone.utc) + timedelta(hours=ACCESS_HOURS)}
     return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm=ALG)
+
+
+def create_guest_token() -> str:
+    """Server-issued read-only session. No DB user — role 'guest' is denied every write by require_role."""
+    payload = {"sub": "guest", "email": "guest", "role": "guest", "type": "access",
+               "exp": datetime.now(timezone.utc) + timedelta(hours=GUEST_ACCESS_HOURS)}
+    return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm=ALG)
+
+
+def validate_password(p: str) -> None:
+    if len(p) < 10:
+        raise HTTPException(400, "Password must be at least 10 characters")
+    if len(p.encode("utf-8")) > 72:
+        raise HTTPException(400, "Password is too long (max 72 bytes)")
+    if not re.search(r"[A-Za-z]", p) or not re.search(r"\d", p):
+        raise HTTPException(400, "Password must include both letters and numbers")
+
+
+async def rate_limit(key: str, max_calls: int, window_seconds: int) -> None:
+    now = datetime.now(timezone.utc)
+    rec = await db.rate_limits.find_one({"key": key})
+    if rec and rec.get("window_start") and rec["window_start"].replace(tzinfo=timezone.utc) > now - timedelta(seconds=window_seconds):
+        if rec.get("count", 0) >= max_calls:
+            raise HTTPException(429, "Too many requests. Please wait a moment and try again.")
+        await db.rate_limits.update_one({"key": key}, {"$inc": {"count": 1}})
+    else:
+        await db.rate_limits.update_one({"key": key}, {"$set": {"window_start": now, "count": 1}}, upsert=True)
 
 
 def public_user(u: dict) -> dict:
@@ -49,6 +81,8 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(401, "Invalid token")
     if payload.get("type") != "access":
         raise HTTPException(401, "Invalid token type")
+    if payload.get("role") == "guest":
+        return dict(GUEST_USER)
     user = await db.users.find_one({"id": payload["sub"]})
     if not user or not user.get("active", True):
         raise HTTPException(401, "User not found or deactivated")
@@ -95,6 +129,10 @@ async def seed_users():
     await db.login_attempts.create_index("identifier")
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=86400)
     await db.password_reset_tokens.create_index("token_hash")
+    await db.role_requests.create_index([("user_id", 1), ("status", 1)])
+    await db.role_requests.create_index([("status", 1), ("requested_at", -1)])
+    await db.rate_limits.create_index("key", unique=True)
+    await db.rate_limits.create_index("window_start", expireAfterSeconds=3600)
     await upsert_user(os.environ["ADMIN_EMAIL"], os.environ["ADMIN_PASSWORD"], "System Administrator", "admin")
     from livemode import DEMO_MODE
     if DEMO_MODE and os.environ.get("DEMO_SUPERVISOR_PASSWORD") and os.environ.get("DEMO_ANALYST_PASSWORD"):

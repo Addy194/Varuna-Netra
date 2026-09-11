@@ -157,6 +157,19 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class SignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str
+    password: str = Field(min_length=10, max_length=128)
+    organization: Optional[str] = Field(default=None, max_length=200)
+
+
+class RoleRequestCreate(BaseModel):
+    requested_role: Literal["analyst", "supervisor"]
+    organization: Optional[str] = Field(default=None, max_length=200)
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
 class CaseUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: Optional[str] = None

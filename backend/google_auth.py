@@ -30,7 +30,11 @@ def capabilities() -> dict:
     g = google_status()
     if g["enabled"]:
         g = {**g, "policy": "PUBLIC_SIGN_IN", "default_role": "viewer"}
-    return {"environment": APP_ENV, "demo_mode": DEMO_MODE, "authentication": {"email_password": True, "google": g}}
+    return {"environment": APP_ENV, "demo_mode": DEMO_MODE, "authentication": {
+        "email_password": {"enabled": True, "signup": True, "default_role": "viewer", "password_policy": "min 10 chars, letters + numbers"},
+        "google": g,
+        "guest": {"enabled": True, "role": "guest", "read_only": True},
+    }}
 
 
 async def fetch_google_identity(session_id: str) -> dict:

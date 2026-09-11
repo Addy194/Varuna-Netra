@@ -1,6 +1,4 @@
-"""Emergent-managed Google sign-in. Identity comes from Google; authorization comes from the users collection.
-Policy: PUBLIC sign-in — a new Google user is auto-provisioned at LOWEST privilege (role=viewer). Existing users
-keep their stored role (never auto-promoted). Disabled accounts are not reactivated by Google sign-in."""
+"""Emergent-managed Google sign-in. Identity comes from Google; authorization comes ONLY from the users collection (invite-only)."""
 import logging
 import os
 
@@ -27,10 +25,7 @@ def google_status() -> dict:
 
 
 def capabilities() -> dict:
-    g = google_status()
-    if g["enabled"]:
-        g = {**g, "policy": "PUBLIC_SIGN_IN", "default_role": "viewer"}
-    return {"environment": APP_ENV, "demo_mode": DEMO_MODE, "authentication": {"email_password": True, "google": g}}
+    return {"environment": APP_ENV, "demo_mode": DEMO_MODE, "authentication": {"email_password": True, "google": google_status()}}
 
 
 async def fetch_google_identity(session_id: str) -> dict:

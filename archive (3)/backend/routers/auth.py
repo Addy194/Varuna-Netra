@@ -60,7 +60,7 @@ class GoogleSession(BaseModel):
 @router.post("/auth/google/session")
 async def google_session(body: GoogleSession, request: Request, response: Response):
     """Exchange the Emergent session_id server-side; grant access ONLY to an existing active user (role from DB, never from the client)."""
-    from google_auth import google_status, fetch_google_identity
+    from google_auth import google_status, fetch_google_identity, UNAUTHORIZED_MSG
     if not google_status()["enabled"]:
         raise HTTPException(403, "Google sign-in is not enabled for this deployment")
     ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "unknown")).split(",")[0].strip()
@@ -73,20 +73,10 @@ async def google_session(body: GoogleSession, request: Request, response: Respon
         raise HTTPException(401, str(e))
     email = ident_data["email"]
     user = await db.users.find_one({"email": email})
-    if user and not user.get("active", True):
-        # Existing but disabled — Google must NOT silently reactivate.
+    if not user or not user.get("active", True):
         await record_failure(ident)
-        await audit("user", user["id"], "auth.google_denied", {"email": email, "reason": "disabled"}, email)
-        raise HTTPException(403, "Your Varuna Netra account is disabled. Contact an administrator.")
-    if not user:
-        # Public auto-provisioning at LOWEST privilege. Role is forced server-side to viewer —
-        # never taken from the client, the form, or Google metadata. No auto-promotion, ever.
-        now = datetime.now(timezone.utc)
-        user = {"id": new_id(), "email": email, "name": ident_data.get("name") or email.split("@")[0],
-                "role": "viewer", "active": True, "auth_provider": "google", "email_verified": True,
-                "created_at": now, "first_login": now, "last_login": now, "last_login_method": "google"}
-        await db.users.insert_one(user)
-        await audit("user", user["id"], "auth.google_provisioned", {"email": email, "role": "viewer"}, email)
+        await audit("user", user["id"] if user else "unknown", "auth.google_denied", {"email": email, "reason": "inactive" if user else "not_authorized"}, email)
+        raise HTTPException(403, UNAUTHORIZED_MSG)
     await clear_failures(ident)
     token = create_access_token(user)
     response.set_cookie("access_token", token, httponly=True, secure=True, samesite="lax", max_age=ACCESS_HOURS * 3600, path="/")

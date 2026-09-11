@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Outlet, useNavigate, NavLink } from "react-router-dom";
-import { Radar, ShieldAlert, LogOut, Menu } from "lucide-react";
+import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
+import { Radar, ShieldAlert, LogOut, Menu, MapPin } from "lucide-react";
 import { api, hasRole } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { LiveBell, CriticalBanner } from "@/components/LiveBell";
@@ -40,6 +40,7 @@ export const Layout = () => {
           </span>
           <span className="whitespace-nowrap font-display text-lg font-bold tracking-tight">Varuna <span style={{ color: "#00F0FF" }}>Netra</span></span>
         </NavLink>
+        <ContextChip />
         <div className="ml-auto flex shrink-0 items-center gap-4">
           {(stats || statsErr) && (
             <div className="hidden items-center gap-4 xl:flex" title="Real database counts (demo/mock records excluded)">
@@ -88,3 +89,28 @@ const Stat = ({ label, value, color = "#F8FAFC", icon, testId, onClick }) => (
     <span className="font-mono text-sm font-semibold flex items-center gap-1" style={{ color }}>{icon}{value}</span>
   </button>
 );
+
+const ContextChip = () => {
+  const loc = useLocation();
+  const [label, setLabel] = useState(null);
+  const [tone, setTone] = useState("#38BDF8");
+  useEffect(() => {
+    let cancel = false;
+    const m = loc.pathname.match(/^\/cases\/([^/]+)/);
+    if (m) {
+      setTone("#00F0FF");
+      api.get(`/cases/${m[1]}`).then((r) => { if (!cancel) setLabel(`CASE ${r.data.case_number}`); }).catch(() => { if (!cancel) setLabel("CASE"); });
+    } else {
+      setTone("#38BDF8");
+      api.get("/aoi").then((r) => { if (!cancel) { const a = r.data?.aoi; setLabel(a ? `AOI · ${a.name || a.label || a.kind || "custom"}` : "AOI · Global (none set)"); } }).catch(() => { if (!cancel) setLabel(null); });
+    }
+    return () => { cancel = true; };
+  }, [loc.pathname]);
+  if (!label) return null;
+  return (
+    <div title={label} data-testid="context-chip" className="hidden max-w-[260px] items-center gap-1.5 rounded-full border px-3 py-1 lg:flex" style={{ borderColor: "var(--border-default)", background: "rgba(56,189,248,0.06)" }}>
+      <MapPin size={12} color={tone} className="shrink-0" />
+      <span className="truncate font-mono text-[11px]" style={{ color: tone }}>{label}</span>
+    </div>
+  );
+};

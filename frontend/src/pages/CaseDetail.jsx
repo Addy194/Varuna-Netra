@@ -28,7 +28,7 @@ import { useLiveVessels } from "@/components/map/LiveVesselLayer";
 import { AssetSearch, assetBounds } from "@/components/map/AssetSearch";
 import { useLive } from "@/context/LiveFeed";
 
-const TABS = [["candidates", "Candidates"], ["review", "Analyst review"], ["response", "Response"], ["vulnerability", "Vulnerability"], ["timeline", "Timeline"], ["files", "Files"], ["beforeafter", "Before / After"], ["scenes", "Scene timeline"], ["evidence", "Evidence & audit"], ["log", "Processing log"]];
+const TABS = [["candidates", "Candidates"], ["review", "Analyst review"], ["response", "Response"], ["precedents", "Related precedent"], ["vulnerability", "Vulnerability"], ["timeline", "Timeline"], ["files", "Files"], ["beforeafter", "Before / After"], ["scenes", "Scene timeline"], ["evidence", "Evidence & audit"], ["log", "Processing log"]];
 const overlayBtn = { background: "rgba(10,14,23,0.85)", border: "1px solid var(--border-highlight)", backdropFilter: "blur(12px)" };
 
 export default function CaseDetail() {
@@ -217,7 +217,8 @@ export default function CaseDetail() {
           {tab === "review" && <div className="space-y-4"><DetectorFeedback caseId={id} source={c.source} onSaved={load} /><ReviewForm caseId={id} candidates={cands?.candidates} reasonCodes={config?.reason_codes} resultVersion={cands?.version} onSaved={load} /></div>}
           {tab === "timeline" && <CaseTimeline caseId={id} caseNumber={c.case_number} />}
           {tab === "files" && <Attachments caseId={id} onChanged={load} />}
-          {tab === "response" && <div className="space-y-4"><ResponseEta caseId={id} /><Playbook caseId={id} /><div className="px-4 pb-4"><Precedents caseId={id} /></div></div>}
+          {tab === "response" && <div className="space-y-4"><ResponseEta caseId={id} /><Playbook caseId={id} /></div>}
+          {tab === "precedents" && <div className="px-4 pb-4" data-testid="precedents-tab"><Precedents caseId={id} /></div>}
           {tab === "scenes" && <SceneTimeline caseId={id} />}
           {tab === "vulnerability" && <Vulnerability caseId={id} spillGeojson={geo} />}
           {tab === "beforeafter" && <div className="h-[520px]"><BeforeAfter caseId={id} /></div>}

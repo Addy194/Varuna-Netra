@@ -48,13 +48,18 @@ async def purge_demo_data(actor: str) -> dict:
     spill_ids = [s["id"] for s in spills]
     cases = await db.cases.find({"spill_observation_id": {"$in": spill_ids}}, {"id": 1}).to_list(500)
     case_ids = [c["id"] for c in cases]
-    # test/demo cases created against the North Sea demo box without a demo scene (integration-test artefacts)
-    box = {"centroid": {"$geoWithin": {"$box": [[1.5, 51.5], [7.0, 55.5]]}}}
+    # test/demo cases created against the North Sea demo box without a demo scene (integration-test artefacts).
+    # Match by test/mock SOURCE or test SCENE only — never by geography alone, so genuine
+    # detector/analyst/imported investigations that happen to sit in the North Sea are never removed.
     test_scenes = [s["id"] for s in await db.scenes.find({"$or": [{"storage_ref": {"$regex": "^s3://test/"}}, {"provider_scene_id": {"$regex": "^TEST_"}}]}, {"id": 1}).to_list(500)]
     scene_ids = list(set(scene_ids + test_scenes))
-    extra_spills = [s["id"] for s in await db.spill_observations.find({"$or": [box, {"source": {"$in": ["test", "mock_detector"]}}, {"scene_id": {"$in": test_scenes}}]}, {"id": 1}).to_list(2000)]
+    extra_spills = [s["id"] for s in await db.spill_observations.find({"$or": [{"source": {"$in": ["test", "mock_detector"]}}, {"scene_id": {"$in": test_scenes}}]}, {"id": 1}).to_list(2000)]
     extra_cases = [c["id"] for c in await db.cases.find({"spill_observation_id": {"$in": extra_spills}}, {"id": 1}).to_list(2000)]
     spill_ids, case_ids = list(set(spill_ids + extra_spills)), list(set(case_ids + extra_cases))
+    # SAFETY GUARD: never delete a genuine investigation (detector/analyst/imported) even if swept in above.
+    genuine = {c["id"] for c in await db.cases.find({"id": {"$in": case_ids}, "origin": {"$in": ["detector", "analyst", "imported"]}}, {"id": 1}).to_list(2000)}
+    if genuine:
+        case_ids = [cid for cid in case_ids if cid not in genuine]
     demo_ais = {"source": {"$in": ["satellite-ais", "terrestrial-ais", "csv-upload"]}, "lat": {"$gte": 51.5, "$lte": 55.5}, "lon": {"$gte": 1.5, "$lte": 7.0},
                 "timestamp": {"$gte": datetime(2026, 6, 8, tzinfo=timezone.utc), "$lte": datetime(2026, 6, 13, tzinfo=timezone.utc)}}
     out = {}

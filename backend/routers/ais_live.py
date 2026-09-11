@@ -23,7 +23,7 @@ class Coverage(BaseModel):
 @router.get("/ais/status")
 async def live_status(user=Depends(get_current_user)):
     cov = await ais_live.get_coverage()
-    st = ais_live.status()
+    st = await ais_live.status_async()
     return clean({**st, "coverage_mode": cov["mode"], "coverage_name": cov["name"], "coverage_bbox": cov["bboxes"], "coverage_bbox_format": "[S,W,N,E]",
                   "aisstream_bounding_boxes": ais_live.to_aisstream_boxes(cov["bboxes"]), "coverage_ref": cov.get("ref"), "regions": ais_live.REGIONS,
                   "note": None if st["connected"] else "Satellite analysis still operational; vessel attribution unavailable until AIS coverage is restored."})
@@ -58,7 +58,7 @@ async def set_region_coverage(region: str, user=Depends(require_role("supervisor
 async def vessels(user=Depends(get_current_user)):
     """Canonical AIS vessel endpoint. `vessels` = live AISStream active cache (genuine messages only);
     `indexed` = per-MMSI summary of stored ais_positions history (AISStream + CSV/batch uploads, each with its source)."""
-    st = ais_live.status()
+    st = await ais_live.status_async()
     live = sorted(ais_live.state["active"].values(), key=lambda v: v["received_at"], reverse=True)
     pipeline = [
         {"$match": {"timestamp": {"$gte": datetime.now(timezone.utc) - timedelta(days=90)}}},

@@ -10,7 +10,7 @@ from db import db, client, ensure_indexes
 import jobs
 import services  # noqa: F401  (registers job handlers)
 from routers import ingest, cases, system, auth as auth_router, jurisdictions, watchlist, timeline, attachments, rules as rules_router, satellite, ais_live as ais_live_router, scene_watch as scene_watch_router, imagery, live, gazetteer, archive, prosecution, icg as icg_router, vulnerability as vulnerability_router, dark_vessel as dark_vessel_router, realtime as realtime_router
-from livemode import DEMO_MODE, seed_india_watches
+from livemode import DEMO_MODE, APP_ENV, seed_india_watches
 from icg import seed_icg
 from vulnerability import seed_sites
 import ais_live
@@ -80,12 +80,23 @@ api = APIRouter(prefix="/api")
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ready": bool(getattr(app.state, "ready", False))}
+    return {"status": "ok", "ready": bool(getattr(app.state, "ready", False)), "environment": APP_ENV, "demo_mode": DEMO_MODE}
 
 
 @api.get("/health")
 async def api_health():
-    return {"status": "ok", "ready": bool(getattr(app.state, "ready", False))}
+    """Deployment health: production/demo mode, AIS key presence (boolean only) and truthful AIS runtime state. Never starts workers, never exposes secrets."""
+    st = await ais_live.status_async()
+    db_ok = True
+    try:
+        await db.command("ping")
+    except Exception:  # noqa: BLE001
+        db_ok = False
+    return {"status": "ok" if db_ok else "degraded", "ready": bool(getattr(app.state, "ready", False)), "environment": APP_ENV, "demo_mode": DEMO_MODE, "database": "online" if db_ok else "offline",
+            "ais": {"key_configured": st["configured"], "state": st["state"], "feed": st.get("feed"), "connected": st["connected"], "subscription_confirmed": st["subscription_confirmed"],
+                    "messages_received": st["messages_received"], "positions_stored": st["positions_stored"], "vessels_active": st["vessels_active"], "last_message_at": st["last_message_at"],
+                    "reconnect_count": st["reconnects"], "worker_role": st.get("worker_role"), "worker_owner": st.get("worker_owner")},
+            "workers": {"this_process": ais_live.OWNER, "ais_socket_owner": (await db.settings.find_one({"key": "ais_worker_lease"}, {"_id": 0, "owner": 1}) or {}).get("owner")}}
 
 
 @api.get("/")

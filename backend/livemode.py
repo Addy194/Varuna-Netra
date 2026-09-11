@@ -10,7 +10,9 @@ from models import new_id
 
 STARTED_AT = time.time()
 DEMO_SCENE_PREFIX = "s3://sentinelmar-demo/"
-DEMO_MODE = os.environ.get("DEMO_MODE", "true").lower() in ("1", "true", "yes")
+# DEMO MODE must be an explicit administrator decision — never the default (a missing variable in production means PRODUCTION).
+DEMO_MODE = os.environ.get("DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
+APP_ENV = (os.environ.get("APP_ENV") or os.environ.get("ENVIRONMENT") or ("demo" if DEMO_MODE else "production")).lower()
 STAC_ROOT = "https://planetarycomputer.microsoft.com/api/stac/v1"
 INDIA_EEZ_BBOX = [66.0, 5.5, 95.5, 24.5]
 
@@ -70,14 +72,15 @@ async def data_mode() -> dict:
     s = await db.settings.find_one({"key": "data_mode"}, {"_id": 0}) or {}
     demo_scenes = await db.scenes.count_documents({"storage_ref": {"$regex": f"^{DEMO_SCENE_PREFIX}"}})
     real_scenes = await db.scenes.count_documents({"provider_scene_id": {"$regex": "^S1"}, "storage_ref": {"$not": {"$regex": f"^{DEMO_SCENE_PREFIX}"}}})
-    return {"demo_mode_env": DEMO_MODE, "demo_data_present": demo_scenes > 0, "demo_purged": bool(s.get("demo_purged")), "real_scenes": real_scenes,
-            "mode": "DEMO" if demo_scenes > 0 else "LIVE", "purged_at": s.get("purged_at")}
+    return {"demo_mode_env": DEMO_MODE, "environment": APP_ENV, "demo_data_present": demo_scenes > 0, "demo_purged": bool(s.get("demo_purged")), "real_scenes": real_scenes,
+            "mode": "DEMO" if DEMO_MODE else "PRODUCTION", "note": None if not (demo_scenes > 0 and not DEMO_MODE) else "seeded demo scenes still present in the database — purge them (admin) to keep production counters clean",
+            "purged_at": s.get("purged_at")}
 
 
 async def ais_status_public() -> dict:
     import ais_live
     cov = await ais_live.get_coverage()
-    st = ais_live.status()
+    st = await ais_live.status_async()
     return {**st, "coverage_mode": cov["mode"], "coverage_name": cov["name"], "coverage_bbox": cov["bboxes"], "key_configured": st["configured"], "reconnect_count": st["reconnects"],
             "note": None if st["connected"] else "Satellite analysis still operational; vessel attribution unavailable until AIS coverage is restored."}
 

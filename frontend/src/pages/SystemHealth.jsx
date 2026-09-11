@@ -48,7 +48,7 @@ export default function SystemHealth() {
     <div className="h-full overflow-y-auto p-6" data-testid="system-health-page">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div><p className="label-mono">Data sources · system health</p><h1 className="font-display text-2xl font-extrabold tracking-tight">Live operations</h1></div>
-        <span data-testid="data-mode-badge" className={`rounded px-2 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.2em] ${dm.mode === "LIVE" ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/50" : "bg-amber-400/15 text-amber-300 border border-amber-400/50"}`}>{dm.mode} mode</span>
+        <span data-testid="data-mode-badge" className={`rounded px-2 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.2em] ${dm.mode === "PRODUCTION" ? "bg-emerald-400/15 text-emerald-300 border border-emerald-400/50" : "bg-amber-400/15 text-amber-300 border border-amber-400/50"}`}>{dm.mode} mode</span>
         <span className="font-mono text-[11px] text-slate-400">checked {fmtTime(h.checked_at)} · backend uptime {Math.floor(h.uptime_s / 60)} min · refreshes every 15 s</span>
         <span className="ml-auto flex gap-2">
           {hasRole(user, "supervisor") && <button data-testid="btn-ingest-now" disabled={busy} onClick={ingest} className="inline-flex items-center gap-1 rounded bg-cyan-400 px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-950 disabled:opacity-50"><Download size={12} /> Ingest last 7 days of Sentinel-1</button>}
@@ -57,7 +57,12 @@ export default function SystemHealth() {
       </div>
       {!h.ais.connected && (
         <div className="mb-4 flex items-start gap-2 rounded border border-amber-400/50 bg-amber-400/5 px-3 py-2 text-xs" data-testid="ais-unavailable-banner">
-          <ShieldAlert size={14} className="mt-0.5 shrink-0 text-amber-300" /><div><b className="text-amber-300">AIS unavailable</b> — {h.ais.reason}. {h.ais.note} {!h.ais.configured && <span className="text-slate-400">Add <code>AISSTREAM_API_KEY</code> (free at aisstream.io) to the backend environment to enable live vessel tracking. No demo vessels are ever substituted.</span>}</div>
+          <ShieldAlert size={14} className="mt-0.5 shrink-0 text-amber-300" /><div><b className="text-amber-300">AISStream {h.ais.state}</b> — {h.ais.reason}. {h.ais.note} Satellite investigation continues in {dm.mode} mode. {!h.ais.configured && <span className="text-slate-400">Add <code>AISSTREAM_API_KEY</code> (free at aisstream.io) to the <b>backend</b> deployment environment, then redeploy the backend. No demo vessels are ever substituted.</span>}</div>
+        </div>
+      )}
+      {h.ais.connected && h.ais.state !== "LIVE" && (
+        <div className="mb-4 flex items-start gap-2 rounded border border-cyan-400/40 bg-cyan-400/5 px-3 py-2 text-xs" data-testid="ais-no-coverage-banner">
+          <Radio size={14} className="mt-0.5 shrink-0 text-cyan-300" /><div><b className="text-cyan-300">AISStream connected · no recent AIS observations in this AOI</b> — terrestrial AIS receivers are sparse for {h.ais.coverage_name}. Connection and subscription are healthy; switch to a dense region to see genuine live traffic.</div>
         </div>
       )}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -66,10 +71,15 @@ export default function SystemHealth() {
           <Row k="last real scene" v={h.last_scene ? `${h.last_scene.provider_scene_id?.slice(0, 32)}` : "none yet"} testid="health-last-scene" /><Row k="acquired" v={h.last_scene ? `${fmtTime(h.last_scene.acquisition_time)} (${age(h.last_scene.acquisition_time)})` : "—"} />
           <Row k="active watches" v={`${h.watches.active} (${h.watches.auto_detect} auto-detect)`} /><Row k="scenes / detections 24 h" v={`${h.last_24h.scenes_registered} / ${h.last_24h.detections}`} />
         </Card>
-        <Card icon={Radio} title={`AIS stream (AISStream) · ${h.ais.state === "LIVE" ? "LIVE" : h.ais.state === "NOT_CONFIGURED" ? "NOT CONFIGURED" : h.ais.state === "OFFLINE" ? "AIS OFFLINE" : h.ais.state}`} ok={h.ais.state === "LIVE"} warn={["CONNECTING", "CONNECTED", "RECONNECTING"].includes(h.ais.state)} testid="health-ais">
-          <Row k="state" v={h.ais.connected ? `LIVE AIS · ${h.ais.messages_per_min} msg/min` : h.ais.reason} testid="health-ais-state" /><Row k="configured (key present)" v={String(h.ais.configured)} /><Row k="connected" v={String(h.ais.connected)} testid="health-ais-connected" /><Row k="subscription confirmed" v={String(h.ais.subscription_confirmed)} />
+        <Card icon={Radio} title={`AISStream · ${h.ais.state === "LIVE" ? "LIVE" : h.ais.state === "NOT_CONFIGURED" ? "UNCONFIGURED" : h.ais.state === "CONNECTED" ? "CONNECTED · NO REGIONAL COVERAGE" : h.ais.state}`} ok={h.ais.state === "LIVE"} warn={["CONNECTING", "CONNECTED", "RECONNECTING", "STALE", "STANDBY"].includes(h.ais.state)} testid="health-ais">
+          <Row k="connection" v={h.ais.websocket_open ? "CONNECTED (socket open)" : h.ais.state === "RECONNECTING" ? "RECONNECTING" : h.ais.state === "CONNECTING" ? "CONNECTING" : "OFFLINE"} testid="health-ais-connection" />
+          <Row k="subscription" v={h.ais.subscription_confirmed ? `CONFIRMED${h.ais.subscription_kind ? ` · ${h.ais.subscription_kind}` : ""}` : "PENDING"} testid="health-ais-subscription" />
+          <Row k="feed" v={h.ais.feed || h.ais.state} testid="health-ais-state" /><Row k="configured (key present)" v={String(h.ais.configured)} testid="health-ais-configured" /><Row k="connected" v={String(h.ais.connected)} testid="health-ais-connected" />
           <Row k="messages received" v={h.ais.messages_received} /><Row k="messages / min" v={h.ais.messages_per_min} testid="health-ais-rate" /><Row k="positions stored" v={h.ais.positions_stored} /><Row k="active vessels (30 min)" v={h.ais.vessels_active} /><Row k="last message" v={h.ais.last_message_at ? age(h.ais.last_message_at) : "never"} /><Row k="reconnects" v={h.ais.reconnects} />
+          {h.ais.last_error && <Row k="last error" v={`${h.ais.last_error}${h.ais.last_close_code ? ` (close ${h.ais.last_close_code})` : ""}`} testid="health-ais-error" />}
+          <Row k="ingest worker" v={`${h.ais.worker_role || "—"} · ${h.ais.worker_owner || "—"}`} testid="health-ais-worker" />
           <Row k="coverage" v={`${h.ais.coverage_mode.toUpperCase()} · ${h.ais.coverage_name}`} testid="health-ais-coverage" /><Row k="bbox [S,W,N,E]" v={h.ais.coverage_bbox.map((b) => b.map((x) => x.toFixed(1)).join(",")).join(" | ")} />
+          {h.ais.state === "CONNECTED" && hasRole(user, "supervisor") && <button data-testid="btn-view-live-ais-region" disabled={busy} onClick={() => setRegion("malacca_singapore")} className="mt-2 rounded border border-cyan-400/50 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-cyan-300 hover:bg-cyan-400/10">View live AIS region (Singapore Strait — dense terrestrial coverage)</button>}
           {hasRole(user, "supervisor") && (
             <div className="mt-2 flex flex-wrap gap-1" data-testid="monitor-region-select">
               <span className="label-mono mr-1 self-center">Monitor region</span>

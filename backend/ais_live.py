@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import os
+import random
+import socket
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -40,7 +42,8 @@ REGIONS = {
 }
 DEFAULT_REGIONS = [k for k, v in REGIONS.items() if not v.get("global")]
 
-state = {"connected": False, "subscription_confirmed": False, "messages": 0, "positions": 0, "inserted": 0, "last_message_at": None, "last_position_at": None,
+state = {"connected": False, "subscription_confirmed": False, "socket_open": False, "subscription_sent_at": None, "subscription_kind": None, "last_connect_attempt": None, "last_close_code": None,
+         "role": "starting", "messages_at_connect": 0, "messages": 0, "positions": 0, "inserted": 0, "last_message_at": None, "last_position_at": None,
          "connected_at": None, "last_disconnect_at": None, "error": None, "reconnects": 0, "msg_times": [], "active": {}}
 _task: Optional[asyncio.Task] = None
 _buffer: list = []
@@ -181,8 +184,9 @@ def _handle(msg: dict) -> None:
 
 async def _session(key: str, boxes: list) -> None:
     async with websockets.connect(WS_URL, ping_interval=20, close_timeout=5, max_size=2**22) as ws:
+        state.update({"connected_at": datetime.now(timezone.utc), "socket_open": True, "error": None, "last_close_code": None})
         await ws.send(json.dumps({"APIKey": key, "BoundingBoxes": boxes, "FilterMessageTypes": FILTER_TYPES}))
-        state.update({"connected_at": datetime.now(timezone.utc), "error": None})
+        state["subscription_sent_at"] = datetime.now(timezone.utc)
         logger.info("aisstream websocket open, subscription sent for %d bbox(es)", len(boxes))
         last_flush = time.time()
         while not _reconnect_event.is_set():
@@ -192,41 +196,107 @@ async def _session(key: str, boxes: list) -> None:
                     _handle(msg)
             except asyncio.TimeoutError:
                 pass
+            # AISStream sends an {"error": ...} frame within seconds when it rejects a key/subscription; a silent open socket 5 s after
+            # the subscription means it was accepted (the feed can legitimately be empty for a sparsely covered region).
+            if not state["subscription_confirmed"] and state["subscription_sent_at"] and (datetime.now(timezone.utc) - state["subscription_sent_at"]).total_seconds() > 5:
+                state.update({"subscription_confirmed": True, "connected": True, "subscription_kind": "accepted (no error frame within 5 s)"})
             if time.time() - last_flush >= 8 or len(_buffer) >= 500:
                 await _flush()
+                await _snapshot()
                 last_flush = time.time()
         await _flush()
+
+
+LEASE_KEY, LEASE_TTL = "ais_worker_lease", 30
+OWNER = f"{socket.gethostname()}:{os.getpid()}"
+
+
+async def _acquire_lease() -> bool:
+    """Exactly ONE AISStream socket per deployment, even with several backend workers/replicas: a Mongo lease with a 30 s heartbeat."""
+    now = datetime.now(timezone.utc)
+    try:
+        r = await db.settings.update_one({"key": LEASE_KEY, "$or": [{"owner": OWNER}, {"expires_at": {"$lt": now}}, {"expires_at": {"$exists": False}}]},
+                                         {"$set": {"owner": OWNER, "expires_at": now + timedelta(seconds=LEASE_TTL), "renewed_at": now}})
+        if r.matched_count == 0:
+            await db.settings.insert_one({"key": LEASE_KEY, "owner": OWNER, "expires_at": now + timedelta(seconds=LEASE_TTL), "renewed_at": now})
+        return True
+    except Exception:  # noqa: BLE001  (duplicate key → someone else holds it)
+        cur = await db.settings.find_one({"key": LEASE_KEY}, {"_id": 0})
+        return bool(cur and cur.get("owner") == OWNER)
+
+
+async def _renew_lease_loop():
+    while True:
+        await asyncio.sleep(LEASE_TTL / 3)
+        if state["role"] == "ingest":
+            ok = await _acquire_lease()
+            if not ok:
+                state["role"] = "standby"
+                _reconnect_event.set()
+
+
+async def _snapshot() -> None:
+    """Publish runtime telemetry so API workers that do not hold the socket still answer /api/ais/status truthfully."""
+    try:
+        await db.settings.update_one({"key": "ais_runtime_status"}, {"$set": {"key": "ais_runtime_status", "owner": OWNER, "at": datetime.now(timezone.utc), **_status_fields()}}, upsert=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def _run() -> None:
     attempt = 0
     logger.info("AISStream API key configured: %s", key_configured())
+    asyncio.create_task(_renew_lease_loop())
     while True:
         _reconnect_event.clear()
         key = os.environ.get("AISSTREAM_API_KEY")
+        if os.environ.get("AIS_INGEST_ENABLED", "true").strip().lower() in ("0", "false", "no"):
+            state.update({"connected": False, "subscription_confirmed": False, "socket_open": False, "role": "disabled", "error": "AIS ingestion disabled on this instance (AIS_INGEST_ENABLED=false)"})
+            await _snapshot()
+            await asyncio.sleep(30)
+            continue
         if not key:
-            state.update({"connected": False, "subscription_confirmed": False, "error": "API key not configured"})
+            state.update({"connected": False, "subscription_confirmed": False, "socket_open": False, "error": "API key not configured"})
+            await _snapshot()
             try:
                 await asyncio.wait_for(_reconnect_event.wait(), timeout=15)
             except asyncio.TimeoutError:
                 pass
             continue
+        if not await _acquire_lease():
+            state["role"] = "standby"
+            await asyncio.sleep(10)
+            continue
+        state["role"] = "ingest"
         cov = await get_coverage()
+        state["last_connect_attempt"] = datetime.now(timezone.utc)
+        await _snapshot()
         try:
             await _session(key, to_aisstream_boxes(cov["bboxes"]))
             attempt = 0  # clean coverage change → immediate reconnect
         except Exception as e:  # noqa: BLE001
-            state.update({"connected": False, "subscription_confirmed": False, "error": str(e)[:300], "reconnects": state["reconnects"] + 1, "last_disconnect_at": datetime.now(timezone.utc)})
-            delay = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+            code = getattr(e, "code", None) or getattr(getattr(e, "rcvd", None), "code", None)
+            session_s = (datetime.now(timezone.utc) - state["last_connect_attempt"]).total_seconds() if state["last_connect_attempt"] else 0
+            got_msgs = state["messages"] > state.get("messages_at_connect", 0)
+            state["kicks"] = 0 if got_msgs or session_s > 20 else state.get("kicks", 0) + 1  # accepted then dropped in <20 s with zero frames = another client took the key
+            state.update({"error": str(e)[:300], "last_close_code": code, "reconnects": state["reconnects"] + 1, "last_disconnect_at": datetime.now(timezone.utc)})
+            if got_msgs:
+                attempt = 0  # healthy session before the drop → restart the backoff ladder
+            if state["kicks"] >= 3:
+                state["error"] = "KEY_IN_USE_ELSEWHERE: AISStream closed the socket right after subscription 3× in a row without data — this API key is being used by another client (AISStream allows one connection per key; e.g. preview + production sharing a key). Use a separate key per deployment or set AIS_INGEST_ENABLED=false on the other one."
+                delay = 120 + random.uniform(0, 30)  # stop fighting the other deployment
+            else:
+                delay = BACKOFF[min(attempt, len(BACKOFF) - 1)] + random.uniform(0, 1)
             attempt += 1
-            logger.warning("aisstream disconnected (%s); reconnect in %ss", str(e)[:120], delay)
+            logger.warning("aisstream disconnected (%s, close=%s); reconnect in %.1fs", str(e)[:120], code, delay)
             await asyncio.sleep(delay)
         finally:
-            state.update({"connected": False, "subscription_confirmed": False})
+            state.update({"connected": False, "subscription_confirmed": False, "socket_open": False, "subscription_sent_at": None, "messages_at_connect": state["messages"]})
+            await _snapshot()
 
 
 def start() -> None:
-    """Idempotent: exactly one worker per process."""
+    """Idempotent: exactly one worker task per process (and one socket per deployment via the Mongo lease)."""
     global _task
     if _task is None or _task.done():
         _task = asyncio.create_task(_run())
@@ -239,30 +309,64 @@ def stop() -> None:
 
 
 def connection_state() -> str:
-    """NOT_CONFIGURED | CONNECTING | CONNECTED (socket+subscription, no data yet) | LIVE (genuine messages <2 min) | RECONNECTING | OFFLINE."""
+    """NOT_CONFIGURED | CONNECTING | CONNECTED (socket open + subscription accepted, no regional data yet) | LIVE (positions <5 min) | STALE (had data, none for STALE_MIN) | RECONNECTING | OFFLINE | STANDBY."""
     if not key_configured():
         return "NOT_CONFIGURED"
+    if state["role"] == "standby":
+        return "STANDBY"
+    if state["role"] == "disabled":
+        return "DISABLED"
     now = datetime.now(timezone.utc)
-    if state["connected"] and state["subscription_confirmed"]:
-        recent = state["last_position_at"] and (now - state["last_position_at"]).total_seconds() < 300
-        return "LIVE" if (recent and state["positions"] > 0) else "CONNECTED"
+    if state["socket_open"] and state["subscription_confirmed"]:
+        if state["last_position_at"] and (now - state["last_position_at"]).total_seconds() < 300 and state["positions"] > 0:
+            return "LIVE"
+        if state["last_position_at"] and (now - state["last_position_at"]).total_seconds() > STALE_MIN * 60:
+            return "STALE"
+        return "CONNECTED"
+    if state["socket_open"]:
+        return "CONNECTING"  # handshake done, waiting ≤5 s for AISStream to accept/reject the subscription
+    if str(state["error"] or "").startswith("KEY_IN_USE_ELSEWHERE"):
+        return "OFFLINE"
     if state["error"] and state["error"] != "API key not configured":
-        return "RECONNECTING" if state["reconnects"] and state["last_disconnect_at"] and (now - state["last_disconnect_at"]).total_seconds() < 120 else "OFFLINE"
-    return "CONNECTING" if (_task and not _task.done()) else "OFFLINE"
+        return "RECONNECTING" if state["last_disconnect_at"] and (now - state["last_disconnect_at"]).total_seconds() < 120 else "OFFLINE"
+    if _task and not _task.done() and state["last_connect_attempt"] and (now - state["last_connect_attempt"]).total_seconds() < 15:
+        return "CONNECTING"
+    return "OFFLINE"
+
+
+def _feed_label(st: str) -> str:
+    return {"LIVE": "LIVE", "CONNECTED": "CONNECTED — NO REGIONAL AIS COVERAGE (no positions yet in the selected AOI)", "STALE": "STALE — connected, no positions for >%d min" % STALE_MIN,
+            "CONNECTING": "CONNECTING", "RECONNECTING": "RECONNECTING", "OFFLINE": "OFFLINE", "NOT_CONFIGURED": "UNCONFIGURED", "STANDBY": "STANDBY (another backend worker holds the single AISStream connection)"}.get(st, st)
+
+
+def _status_fields() -> dict:
+    st = connection_state()
+    return {"source": SOURCE, "mode": "live", "state": st, "feed": _feed_label(st), "configured": key_configured(), "connected": bool(state["socket_open"] and state["subscription_confirmed"]),
+            "websocket_open": bool(state["socket_open"]), "subscription_confirmed": state["subscription_confirmed"], "subscription_kind": state.get("subscription_kind"),
+            "messages_received": state["messages"], "positions_parsed": state["positions"], "positions_stored": state["inserted"], "messages_per_min": messages_per_min(), "vessels_active": len(state["active"]),
+            "last_connect_attempt": state["last_connect_attempt"], "last_connected_at": state["connected_at"], "last_message_at": state["last_message_at"], "last_position_at": state["last_position_at"],
+            "last_disconnect_at": state["last_disconnect_at"], "last_error": state["error"], "error": state["error"], "last_close_code": state["last_close_code"], "reconnects": state["reconnects"], "reconnect_count": state["reconnects"],
+            "worker_running": bool(_task and not _task.done()), "worker_role": state["role"], "worker_owner": OWNER,
+            "reason": None if (state["socket_open"] and state["subscription_confirmed"]) else (
+                "API key not configured" if not key_configured() else
+                "Another client is using this AISStream API key (one connection per key) — production and preview must use different keys" if str(state["error"] or "").startswith("KEY_IN_USE_ELSEWHERE") else
+                "WebSocket authentication failed (AISStream rejected the API key)" if state["error"] and ("api key" in str(state["error"]).lower() or "1008" in str(state["error"])) else
+                "Connection lost — reconnecting with backoff" if state["error"] else "Connecting")}
 
 
 def status() -> dict:
     """Runtime telemetry only — nothing hard-coded, key never included."""
-    return {"source": SOURCE, "mode": "live", "state": connection_state(), "configured": key_configured(), "connected": bool(state["connected"] and state["subscription_confirmed"]),
-            "websocket_open": bool(state["connected_at"] and not state["last_disconnect_at"] or (state["connected_at"] and state["last_disconnect_at"] and state["connected_at"] > state["last_disconnect_at"])),
-            "subscription_confirmed": state["subscription_confirmed"], "messages_received": state["messages"], "positions_parsed": state["positions"], "positions_stored": state["inserted"],
-            "messages_per_min": messages_per_min(), "vessels_active": len(state["active"]), "last_message_at": state["last_message_at"], "last_position_at": state["last_position_at"],
-            "reconnects": state["reconnects"], "last_disconnect_at": state["last_disconnect_at"], "error": state["error"], "worker_running": bool(_task and not _task.done()),
-            "reason": None if (state["connected"] and state["subscription_confirmed"]) else (
-                "API key not configured" if not key_configured() else
-                "WebSocket authentication failed (AISStream rejected the API key)" if state["error"] and ("api key" in str(state["error"]).lower() or "1008" in str(state["error"])) else
-                "Connection lost" if state["error"] else
-                "No AIS messages received recently" if state["connected_at"] and state["last_message_at"] and (datetime.now(timezone.utc) - state["last_message_at"]).total_seconds() > 120 else "Connecting")}
+    return _status_fields()
+
+
+async def status_async() -> dict:
+    """Same as status(), but a STANDBY process answers with the ingest worker's published snapshot (≤ 10 s old) instead of its own idle state."""
+    s = status()
+    if s["state"] == "STANDBY":
+        snap = await db.settings.find_one({"key": "ais_runtime_status", "owner": {"$ne": OWNER}}, {"_id": 0, "key": 0})
+        if snap and (datetime.now(timezone.utc) - snap["at"]).total_seconds() < 90:
+            return {**snap, "served_by": OWNER, "snapshot_age_s": int((datetime.now(timezone.utc) - snap["at"]).total_seconds())}
+    return s
 
 
 async def test_connection(timeout_s: float = 12.0) -> dict:

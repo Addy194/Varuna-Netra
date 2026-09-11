@@ -11,6 +11,7 @@ import Alerts from "@/pages/Jobs";
 import Login from "@/pages/Login";
 import Users from "@/pages/Users";
 import Zones from "@/pages/Zones";
+import SihDemo from "@/pages/SihDemo";
 import VesselProfile from "@/pages/VesselProfile";
 import Watchlist from "@/pages/Watchlist";
 import Compare from "@/pages/Compare";
@@ -49,7 +50,7 @@ function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/cases/:id" element={<CaseDetail />} />
               <Route path="/vessels/:mmsi" element={<VesselProfile />} />
-              <Route path="/zones" element={<Zones />} />
+              <Route path="/zones" element={<Zones />} /><Route path="/demo" element={<SihDemo />} />
               <Route path="/watchlist" element={<Watchlist />} />
               <Route path="/compare" element={<Compare />} />
               <Route path="/explorer" element={<SceneExplorer />} />

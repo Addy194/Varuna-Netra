@@ -3,7 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, APIRouter, Depends
+from fastapi import FastAPI, APIRouter, Depends, Request
 from starlette.middleware.cors import CORSMiddleware
 
 from db import db, client, ensure_indexes
@@ -84,7 +84,7 @@ async def health():
 
 
 @api.get("/health")
-async def api_health():
+async def api_health(request: Request):
     """Deployment health: production/demo mode, AIS key presence (boolean only) and truthful AIS runtime state. Never starts workers, never exposes secrets."""
     st = await ais_live.status_async()
     db_ok = True
@@ -92,7 +92,7 @@ async def api_health():
         await db.command("ping")
     except Exception:  # noqa: BLE001
         db_ok = False
-    return {"status": "ok" if db_ok else "degraded", "ready": bool(getattr(app.state, "ready", False)), "environment": APP_ENV, "demo_mode": DEMO_MODE, "database": "online" if db_ok else "offline",
+    return {"status": "ok" if db_ok else "degraded", "ready": bool(getattr(app.state, "ready", False)), "environment": APP_ENV, "request_origin_seen": request.headers.get("origin"), "demo_mode": DEMO_MODE, "database": "online" if db_ok else "offline",
             "ais": {"key_configured": st["configured"], "state": st["state"], "feed": st.get("feed"), "connected": st["connected"], "subscription_confirmed": st["subscription_confirmed"],
                     "messages_received": st["messages_received"], "positions_stored": st["positions_stored"], "vessels_active": st["vessels_active"], "last_message_at": st["last_message_at"],
                     "reconnect_count": st["reconnects"], "worker_role": st.get("worker_role"), "worker_owner": st.get("worker_owner")},
@@ -132,10 +132,22 @@ api.include_router(cases.router)
 api.include_router(system.router)
 app.include_router(api)
 
+def _cors_origins() -> list:
+    """Explicit allow-list only: CORS_ORIGINS (comma-separated) or FRONTEND_URL. '*' is never combined with credentials."""
+    raw = [o.strip().rstrip("/") for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
+    fe = (os.environ.get("FRONTEND_URL") or "").strip().rstrip("/")
+    if fe and fe not in raw:
+        raw.append(fe)
+    if not raw:
+        logger.warning("CORS: no CORS_ORIGINS/FRONTEND_URL configured — cross-origin browser requests will be refused")
+    return raw
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=_cors_origins(),
+    allow_origin_regex=os.environ.get("CORS_ORIGIN_REGEX") or r"^https://[a-z0-9.-]+\.(emergentagent\.com|emergent\.host|emergentcf\.cloud)$",
     allow_methods=["*"],
     allow_headers=["*"],
 )

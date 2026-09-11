@@ -130,14 +130,30 @@ async def provenance(case_id: str) -> dict:
     ais_mode = "LIVE" if "AISStream" in ais_src else ("HISTORICAL" if ais_src and not is_demo else ("DEMO" if is_demo else "NONE"))
     pv, src = str(spill.get("processing_version", "")), str(spill.get("source", ""))
     det_badge = "EXPERIMENTAL" if ("darkspot" in pv or "dark_spot" in src) else ("MOCK" if "mock" in pv or "mock" in src else ("DEMO" if is_demo else "ANALYST"))
-    return {"case_id": case_id, "case_number": case["case_number"],
+    ais_last = None
+    if result and result.get("candidates"):
+        fx = (result["candidates"][0].get("evidence") or {}).get("closest_fix") or {}
+        ais_last = fx.get("timestamp")
+    jz = case.get("primary_jurisdiction") or {}
+    zone_doc = await db.jurisdictions.find_one({"code": jz.get("code")}, {"_id": 0, "provenance": 1, "source": 1, "dataset": 1, "authority_status": 1}) if jz.get("code") else None
+    from jurisdiction import provenance_of
+    att = case.get("scene_attachment") or {}
+    return {"case_id": case_id, "case_number": case["case_number"], "case_origin": case.get("origin"), "case_origin_label": case.get("origin_label"),
             "satellite": {"provider": (scene or {}).get("metadata", {}).get("source") or (scene or {}).get("provider") or "external polygon", "scene_id": (scene or {}).get("provider_scene_id"),
-                          "acquisition_time": spill["acquisition_time"], "platform": (scene or {}).get("metadata", {}).get("platform"), "orbit_state": (scene or {}).get("metadata", {}).get("orbit_state"),
-                          "polarization": (scene or {}).get("polarization"), "stac_href": (scene or {}).get("storage_ref") if real_s1 else None,
-                          "badge": "REAL SENTINEL-1" if real_s1 else ("DEMO" if is_demo else "EXTERNAL")},
-            "detection": {"source": spill.get("source"), "model": spill.get("processing_version"), "confidence": spill.get("detection_confidence"),
-                          "badge": det_badge},
-            "ais": {"provider": "AISStream" if ais_mode == "LIVE" else (", ".join(ais_src) or "none"), "mode": ais_mode, "status": await ais_status_public(), "observations": (result or {}).get("position_count", 0), "badge": ais_mode},
+                          "acquisition_time": (scene or {}).get("acquisition_time") or spill["acquisition_time"], "event_time": spill["acquisition_time"], "time_difference_hours": att.get("time_difference_hours"),
+                          "platform": (scene or {}).get("metadata", {}).get("platform"), "orbit_state": (scene or {}).get("metadata", {}).get("orbit_state"),
+                          "polarization": (scene or {}).get("polarization"), "sensor": "SAR (C-band)" if real_s1 else ("optical" if scene and str(scene.get("provider_scene_id", "")).startswith("S2") else None),
+                          "analysis_asset": att.get("analysis_asset_key"), "stac_href": (scene or {}).get("storage_ref") if real_s1 else None,
+                          "badge": "REAL SENTINEL-1" if real_s1 else ("DEMO" if is_demo else ("UNAVAILABLE" if not scene else "EXTERNAL")),
+                          "status": "LATEST AVAILABLE ACQUISITION (archive, not real-time)" if real_s1 else ("no Sentinel scene attached — SAR confirmation pending" if not scene else None)},
+            "detection": {"source": spill.get("source"), "model": spill.get("processing_version"), "confidence": spill.get("detection_confidence"), "badge": det_badge,
+                          "type": "heuristic SAR dark-spot detector (OpenCV) — experimental" if det_badge == "EXPERIMENTAL" else ("analyst / API-registered polygon" if det_badge == "ANALYST" else det_badge.lower()),
+                          "validation": "MODEL ACCURACY NOT YET VALIDATED AGAINST A LABELLED BENCHMARK DATASET"},
+            "ais": {"provider": "AISStream" if ais_mode == "LIVE" else (", ".join(ais_src) or "none"), "mode": ais_mode, "status": await ais_status_public(), "observations": (result or {}).get("position_count", 0), "badge": ais_mode if ais_mode != "NONE" else "UNAVAILABLE",
+                    "last_observation": ais_last, "note": "positions relative to the satellite acquisition time (historical window), not current positions" if ais_mode in ("LIVE", "HISTORICAL") else None},
+            "jurisdiction": {"zone": jz.get("code"), "zone_name": jz.get("name"), "country": jz.get("country") or jz.get("country_code"), "authority": jz.get("authority"),
+                             "dataset": ((zone_doc or {}).get("dataset") or {}).get("name") or (zone_doc or {}).get("source"), "badge": (provenance_of(zone_doc) if zone_doc else "UNAVAILABLE"),
+                             "resolved_at": case.get("jurisdiction_resolved_at"), "note": "geographic intersection with a reference boundary — not a legal determination" if zone_doc else "no reference maritime zone intersects (high seas or zone not imported)"},
             "analysis": {"algorithm": (result or {}).get("algorithm_version"), "version": (result or {}).get("version"), "analysed_at": (result or {}).get("created_at"), "input_hash": (result or {}).get("input_hash"),
-                         "candidates": len((result or {}).get("candidates", [])), "degraded": (result or {}).get("degraded")},
-            "data_mode": "DEMO" if is_demo else "LIVE"}
+                         "candidates": len((result or {}).get("candidates", [])), "degraded": (result or {}).get("degraded"), "weights": ((result or {}).get("params") or {}).get("weights")},
+            "data_mode": "DEMO" if is_demo else ("REFERENCE" if case.get("origin") == "imported" else "LIVE")}
